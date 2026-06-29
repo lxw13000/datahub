@@ -1,0 +1,92 @@
+{
+  "settings": {
+    "index": {
+      "number_of_shards": "1",
+      "number_of_replicas": "0",
+      "max_result_window": 20000
+    },
+    "analysis": {
+      "tokenizer": {
+        "ngram_tokenizer": {
+          "type": "ngram",
+          "min_gram": 1,
+          "max_gram": 1,
+          "token_chars": [
+            "letter",
+            "digit"
+          ]
+        }
+      },
+      "analyzer": {
+        "ngram_analyzer": {
+          "type": "custom",
+          "tokenizer": "ngram_tokenizer",
+          "filter": [
+            "lowercase"
+          ]
+        }
+      }
+    }
+  },
+  "mappings": {
+    "properties": {
+      "id": {
+        "type": "long"
+      },
+      "common_id": {
+        "type": "long"
+      },
+      "user_id": {
+        "type": "long"
+      },
+      "create_time": {
+        "type": "date",
+        "format": "yyyy-MM-dd HH:mm:ss || yyyy-MM-dd || yyyy-MM || yyyy || epoch_millis"
+      },
+      "dt": {
+        "type": "date",
+        "format": "yyyy-MM-dd HH:mm:ss || yyyy-MM-dd || yyyy-MM || yyyy || epoch_millis"
+      },
+      "status": {
+        "type": "integer"
+      },
+      "tokens": {
+        "type": "long"
+      },
+      "tokens_new": {
+        "type": "long"
+      },
+      "tokens_old": {
+        "type": "long"
+      },
+      "business_type": {
+        "type": "integer"
+      },
+      "amount": {
+        "type": "integer"
+      },
+      "prop_id": {
+        "type": "integer"
+      },
+      "room_id": {
+        "type": "integer"
+      },
+      "ta_user_id": {
+        "type": "integer"
+      },
+      "sex": {
+        "type": "integer"
+      },
+      "country_code": {
+        "type": "keyword"
+      },
+      "anchor": {
+        "type": "integer"
+      },
+      "bucket_1m": {
+        "type": "date",
+        "format": "yyyy-MM-dd HH:mm:ss || yyyy-MM-dd || yyyy-MM || yyyy || epoch_millis"
+      }
+    }
+  }
+}

@@ -1,0 +1,30 @@
+spring:
+  data:
+    redis:
+      host: 127.0.0.1
+      port: 6379
+      timeout: 3000ms
+      lettuce:
+        pool:
+          max-active: 20
+          max-idle: 10
+          min-idle: 2
+          max-wait: 2000ms
+  datasource:
+    driver-class-name: com.mysql.cj.jdbc.Driver
+    url: jdbc:mysql://database-1-instance-1-ap-southeast-1b.cbiiioywwvwg.ap-southeast-1.rds.amazonaws.com:3306/sano-prod?useUnicode=true&characterEncoding=UTF8&zeroDateTimeBehavior=convertToNull&allowMultiQueries=true&useSSL=false&serverTimezone=Asia/Chongqing&allowPublicKeyRetrieval=true
+    username: ${MYSQL_UNM:admin}
+    password: ${MYSQL_PWD:fl#alHGaldsj!skgnn2850allgnJsHg}
+
+sano:
+  es:
+    uris: ${ES_URIS:127.0.0.1:9201}
+    username: ${ES_USERNAME:elastic}
+    password: ${ES_PASSWORD:es2peter}
+    socket-timeout: 600000
+    connection-timeout: 500000
+    connection-request-timeout: 5000
+    max-conn-total: 100
+    max-conn-per-route: 20
+
+
