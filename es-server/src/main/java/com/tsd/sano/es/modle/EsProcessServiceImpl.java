@@ -54,25 +54,16 @@ public class EsProcessServiceImpl {
         this.jdbcTemplate = jdbcTemplate;
     }
 
-    /**
-     * 验证索引存在与否
-     *
-     * @param indexName 索引名称
-     * @return boolean ture 存在，false 不存在
-     * @author lxw
-     * @date 2025/4/29 15:35
-     **/
-    public boolean existsIndex(String indexName) {
-        try {
-            BooleanResponse exists = client.indices().exists(e -> e.index(indexName));
-            return exists.value();
-        } catch (IOException e) {
-            log.error("验证索引存在与否失败，e--->:{}", e.getMessage());
-            return false;
-        }
-    }
 
-    public void initEsData(String indexAlias, String mappingFileName) {
+    /**
+     * 数据导入ES索引
+     *
+     * @param indexAlias      别名（数据库表名）
+     * @param mappingFileName es索引的mapping文件名（位于resources/esmapping目录下）
+     * @author lxw
+     * @date 2026/6/29 16:44
+     **/
+    public void toLeadEsData(String indexAlias, String mappingFileName) {
         // 如果未传入esClient，使用默认配置的客户端
         String indexName = indexAlias + "_" + TimeUtils.formatDate(LocalDate.now().minusDays(1), TimeUtils.YYYYMMDD);
         try {
@@ -85,7 +76,7 @@ public class EsProcessServiceImpl {
                 return;
             }
             // 第五步：导入数据到ES索引（传入批次号用于进度追踪）
-            importEsData(indexName, indexAlias);
+            doImportEsData(indexName, indexAlias);
         } catch (Exception e) {
             // 发生异常时记录错误日志
             log.error("===> ES-Import 数据导入失败，批次号：{}，错误：{}", indexName, e.getMessage(), e);
@@ -94,6 +85,16 @@ public class EsProcessServiceImpl {
     }
 
 
+    /**
+     * 创建ES索引结构
+     *
+     * @param indexName       索引名称
+     * @param indexAlias      索引别名
+     * @param mappingFileName es索引的mapping文件名（位于resources/esmapping目录下）
+     * @return boolean
+     * @author lxw
+     * @date 2026/6/29 16:46
+     **/
     public boolean createEsIndex(String indexName, String indexAlias, String mappingFileName) {
 
         try {
@@ -128,7 +129,15 @@ public class EsProcessServiceImpl {
         }
     }
 
-    public void importEsData(String indexName, String indexAlias) {
+    /**
+     * 执行数据导入ES索引操作
+     *
+     * @param indexName  索引名称
+     * @param indexAlias 索引别名（数据库表名）
+     * @author lxw
+     * @date 2026/6/29 16:47
+     **/
+    public void doImportEsData(String indexName, String indexAlias) {
 
         // 获取数据库表名和查询条件
         String tableName = indexAlias;

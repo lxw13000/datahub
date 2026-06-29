@@ -33,7 +33,7 @@ public class EsImportController {
 
     @GetMapping("/test1")
     public void getProgress() {
-        esProcessService.initEsData("sano_wallet_coin_record", "sano_wallet_coin_record.json");
+        esProcessService.toLeadEsData("sano_wallet_coin_record", "sano_wallet_coin_record.json");
     }
 
 }
