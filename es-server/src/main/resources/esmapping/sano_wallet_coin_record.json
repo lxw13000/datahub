@@ -41,11 +41,11 @@
       },
       "create_time": {
         "type": "date",
-        "format": "yyyy-MM-dd HH:mm:ss || yyyy-MM-dd || yyyy-MM || yyyy || epoch_millis"
+        "format": "yyyy-MM-dd'T'HH:mm:ss || yyyy-MM-dd HH:mm:ss || yyyy-MM-dd || yyyy-MM || yyyy || epoch_millis"
       },
       "dt": {
         "type": "date",
-        "format": "yyyy-MM-dd HH:mm:ss || yyyy-MM-dd || yyyy-MM || yyyy || epoch_millis"
+        "format": "yyyy-MM-dd'T'HH:mm:ss || yyyy-MM-dd HH:mm:ss || yyyy-MM-dd || yyyy-MM || yyyy || epoch_millis"
       },
       "status": {
         "type": "integer"
@@ -85,7 +85,7 @@
       },
       "bucket_1m": {
         "type": "date",
-        "format": "yyyy-MM-dd HH:mm:ss || yyyy-MM-dd || yyyy-MM || yyyy || epoch_millis"
+        "format": "yyyy-MM-dd'T'HH:mm:ss || yyyy-MM-dd HH:mm:ss || yyyy-MM-dd || yyyy-MM || yyyy || epoch_millis"
       }
     }
   }

@@ -6,4 +6,7 @@ spring:
     name: es-server
   profiles:
     active: dev
-
+  # 开启虚拟线程
+  threads:
+    virtual:
+      enabled: true

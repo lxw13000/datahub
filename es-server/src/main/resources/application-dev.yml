@@ -28,3 +28,46 @@ sano:
     max-conn-per-route: 20
 
 
+    import:
+      # 默认关闭；确认ES和数据库配置无误后再打开
+      task-enabled: false
+      # 每天02:30导入昨天的数据
+      cron: "0 30 2 * * ?"
+      # 每批读取数据库数量
+      page-size: 3000
+      # Bulk线程数
+      worker-count: 4
+      # BlockingQueue队列容量
+      queue-capacity: 30
+      # Bulk最大文档数
+      bulk-actions: 2000
+      # Bulk最大体积，单位MB
+      bulk-size-mb: 10
+      # 最大重试次数
+      retry-times: 3
+      # Retry等待(ms)
+      retry-interval: 1000
+      # 是否开启导入监控
+      enable-monitor: true
+
+      # 单机Docker ES建议保持0副本
+      # 导入期间是否关闭Refresh
+      disable-refresh: true
+      # 导入期间是否关闭副本
+      disable-replica: true
+      # 导入完成是否删除历史索引
+      delete-history-index: false
+      # 保留历史索引天数
+      reserve-days: 30
+
+      tables:
+        - enabled: true
+          index-alias: sano_wallet_coin_record
+          table-name: sano_wallet_coin_record
+          mapping-file: sano_wallet_coin_record.json
+          id-column: id
+          dt-column: dt
+          # where-sql为空时自动使用 dt = importDate
+          where-sql:
+
+

@@ -62,7 +62,7 @@ public class EsImportService {
         config.setIndexAlias(indexAlias);
         config.setTableName(indexAlias);
         config.setMappingFile(mappingFile);
-        config.setImportDate(LocalDate.now().minusDays(1));
+        config.setImportDate(LocalDate.now());
         return importData(config);
     }
 
@@ -90,7 +90,14 @@ public class EsImportService {
             try {
                 log.info("===> ES-Import start. alias={}, index={}, table={}, date={}",
                         config.getIndexAlias(), config.getIndexName(), config.getTableName(), config.getImportDate());
+
                 monitorStart(context);
+
+                long total = jdbcDataReader.count(context);
+                if (total <= 0L) {
+                    throw new BusinessException("ES import no data, table=" + config.getTableName()
+                            + ", date=" + config.getImportDate());
+                }
 
                 indexCreated = indexManager.createIndex(context);
                 if (!indexCreated) {
@@ -99,12 +106,6 @@ public class EsImportService {
 
                 indexManager.beforeImport(context);
                 optimized = true;
-
-                long total = jdbcDataReader.count(context);
-                if (total <= 0L) {
-                    throw new BusinessException("ES import no data, table=" + config.getTableName()
-                            + ", date=" + config.getImportDate());
-                }
 
                 Future<?> bulkFuture = bulkExecutor.submit(() -> bulkImporter.importFromQueue(context));
                 try {

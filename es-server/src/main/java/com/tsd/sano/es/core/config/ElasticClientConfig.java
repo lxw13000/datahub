@@ -5,7 +5,6 @@ import co.elastic.clients.json.jackson.JacksonJsonpMapper;
 import co.elastic.clients.transport.ElasticsearchTransport;
 import co.elastic.clients.transport.rest_client.RestClientTransport;
 import com.fasterxml.jackson.databind.ObjectMapper;
-import com.fasterxml.jackson.datatype.jsr310.JavaTimeModule;
 import com.tsd.sano.es.core.exception.BusinessException;
 import org.apache.commons.lang3.StringUtils;
 import org.apache.http.HttpHost;
@@ -51,6 +50,13 @@ public class ElasticClientConfig {
 
     @Value("${sano.es.max-conn-per-route:20}")
     private Integer maxConnPerRoute;
+
+    // 直接注入 Spring Boot 自动配置好的 ObjectMapper
+    private final ObjectMapper objectMapper;
+
+    public ElasticClientConfig(ObjectMapper objectMapper) {
+        this.objectMapper = objectMapper;
+    }
 
     @Bean
     @ConditionalOnMissingBean(ElasticsearchClient.class)
@@ -105,7 +111,6 @@ public class ElasticClientConfig {
         // =========================
         // 4. JSON mapper（关键优化点）
         // =========================
-        ObjectMapper objectMapper = new ObjectMapper().registerModule(new JavaTimeModule());
         JacksonJsonpMapper jsonpMapper = new JacksonJsonpMapper(objectMapper);
         ElasticsearchTransport transport =
                 new RestClientTransport(restClient, jsonpMapper);
