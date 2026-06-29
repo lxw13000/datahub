@@ -1,0 +1,36 @@
+spring:
+  profiles:
+    active: prod
+
+sano:
+  es:
+    import:
+      # 默认关闭；确认ES和数据库配置无误后再打开
+      task-enabled: false
+      # 每天02:30导入昨天的数据
+      cron: "0 30 2 * * ?"
+
+      page-size: 3000
+      worker-count: 4
+      queue-capacity: 30
+      bulk-actions: 2000
+      bulk-size-mb: 10
+      retry-times: 3
+      retry-interval: 1000
+      enable-monitor: true
+
+      # 单机Docker ES建议保持0副本
+      disable-refresh: true
+      disable-replica: true
+      delete-history-index: false
+      reserve-days: 30
+
+      tables:
+        - enabled: true
+          index-alias: sano_wallet_coin_record
+          table-name: sano_wallet_coin_record
+          mapping-file: sano_wallet_coin_record.json
+          id-column: id
+          dt-column: dt
+          # where-sql为空时自动使用 dt = importDate
+          where-sql:
