@@ -54,11 +54,11 @@ sano:
       # 每天02:30导入昨天的数据
       cron: "0 30 2 * * ?"
       # 每批读取数据库数量
-      read-batch-size: 3000
+      read-batch-size: 5000
       # Bulk线程数
       worker-count: 4
       # BlockingQueue 队列缓存容量
-      queue-capacity: 30
+      queue-capacity: 40
       # 每次Bulk文档数
       bulk-actions: 3000
       # 或每次bulk累计8MB立即发送，单位MB
