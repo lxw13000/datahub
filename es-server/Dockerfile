@@ -44,6 +44,6 @@ USER app
 EXPOSE 8002
 
 HEALTHCHECK --interval=30s --timeout=5s --start-period=60s --retries=3 \
-  CMD curl -fsS "http://127.0.0.1:${SERVER_PORT}/actuator/health" || curl -fsS "http://127.0.0.1:${SERVER_PORT}/" || exit 1
+  CMD curl -fsS "http://127.0.0.1:${SERVER_PORT}/health" || exit 1
 
 ENTRYPOINT ["sh", "-c", "java ${JAVA_OPTS} -Dserver.port=${SERVER_PORT} -Dspring.profiles.active=${SPRING_PROFILES_ACTIVE} -DLOG_DIR=${LOG_DIR} -jar /app/es-server.jar"]

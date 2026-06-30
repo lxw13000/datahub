@@ -182,8 +182,7 @@ ensure_http_available() {
   sleep "${STABLE_SECONDS}"
   restart_count_after="$(inspect_field '{{.RestartCount}}')"
   [ "${restart_count_before}" = "${restart_count_after}" ] || fail "容器启动后仍发生重启：before=${restart_count_before}, after=${restart_count_after}"
-  curl -fsS "http://127.0.0.1:${SERVER_PORT}/actuator/health" >/dev/null 2>&1 \
-    || curl -fsS "http://127.0.0.1:${SERVER_PORT}/" >/dev/null 2>&1 \
+  curl -fsS "http://127.0.0.1:${SERVER_PORT}/health" >/dev/null 2>&1 \
     || fail "容器运行但 HTTP 端口 ${SERVER_PORT} 不可访问。"
 }
 
