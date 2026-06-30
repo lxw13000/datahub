@@ -12,6 +12,7 @@ import org.springframework.stereotype.Service;
 
 import java.time.LocalDate;
 import java.time.format.DateTimeFormatter;
+import java.time.format.DateTimeParseException;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.ExecutorService;
@@ -62,16 +63,19 @@ public class EsImportService {
     }
 
     /**
-     * 按业务alias和mapping文件导入T+1数据。
+     * 按指定日期导入数据，主要用于开发和测试回放某一天的数据。
      *
-     * <p>默认表名等于alias，导入日期为昨天。</p>
+     * @param indexAlias  业务alias，默认也作为表名
+     * @param mappingFile resources/esmapping目录下的mapping文件名
+     * @param yyyyMMdd    导入日期，格式为yyyyMMdd
+     * @return 导入统计
      */
-    public ImportStatistics importYesterday(String indexAlias, String mappingFile) {
+    public ImportStatistics importAppointDay(String indexAlias, String mappingFile, String yyyyMMdd) {
         EsImportConfig config = new EsImportConfig();
         config.setIndexAlias(indexAlias);
         config.setTableName(indexAlias);
         config.setMappingFile(mappingFile);
-        config.setImportDate(LocalDate.now().minusDays(1));
+        config.setImportDate(parseImportDate(yyyyMMdd));
         return importData(config);
     }
 
@@ -188,6 +192,18 @@ public class EsImportService {
         if (StringUtils.isBlank(config.getIndexName())) {
             // 真实索引按日期分区，业务alias可同时指向保留期内多个日期索引。
             config.setIndexName(alias + "_" + INDEX_DATE_FORMATTER.format(config.getImportDate()));
+        }
+    }
+
+    /**
+     * 解析yyyyMMdd格式导入日期。
+     */
+    private LocalDate parseImportDate(String yyyyMMdd) {
+        String dateText = requireText(yyyyMMdd, "yyyyMMdd");
+        try {
+            return LocalDate.parse(dateText, INDEX_DATE_FORMATTER);
+        } catch (DateTimeParseException e) {
+            throw new BusinessException("ES import yyyyMMdd format invalid, value=" + yyyyMMdd, e);
         }
     }
 

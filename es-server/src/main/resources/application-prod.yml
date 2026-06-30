@@ -16,7 +16,28 @@ spring:
     username: ${MYSQL_UNM:admin}
     password: ${MYSQL_PWD:fl#alHGaldsj!skgnn2850allgnJsHg}
 
+logging:
+  config: classpath:logback-spring.xml
+  file:
+    path: ${LOG_DIR:/app/logs/es-server}
+  level:
+    root: INFO
+    com.tsd.sano.es: INFO
+    com.tsd.sano.es.importer: INFO
+    org.springframework: INFO
+    org.springframework.jdbc.core: INFO
+    co.elastic.clients: WARN
+    org.elasticsearch.client: WARN
+    io.lettuce.core: WARN
+    com.zaxxer.hikari: INFO
+
 sano:
+  log:
+    # 生产环境保留周期较长，便于追踪历史同步问题。
+    max-file-size: 100MB
+    max-history: 30
+    total-size-cap: 10GB
+    async-queue-size: 8192
   es:
     uris: ${ES_URIS:127.0.0.1:9201}
     username: ${ES_USERNAME:elastic}

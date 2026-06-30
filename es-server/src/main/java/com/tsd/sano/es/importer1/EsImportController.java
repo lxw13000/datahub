@@ -40,8 +40,8 @@ public class EsImportController {
 
 
     @GetMapping("/test2")
-    public void getProgress2() {
-        importService.importYesterday("sano_wallet_coin_record", "sano_wallet_coin_record.json");
+    public void getProgress2(String date) {
+        importService.importAppointDay("sano_wallet_coin_record", "sano_wallet_coin_record.json", date);
     }
 
 }

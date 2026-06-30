@@ -55,9 +55,9 @@ public class EsBulkImporter {
     /**
      * 文档大小估算安全系数。
      *
-     * <p>当前表结构字段稳定，按首条估算即可；增加20%余量，避免少数字段较长导致Bulk偏大。</p>
+     * <p>当前表结构字段稳定，按首条估算即可；增加10%余量，避免少数字段较长导致Bulk偏大。</p>
      */
-    private static final double DOC_SIZE_SAFE_FACTOR = 1.2D;
+    private static final double DOC_SIZE_SAFE_FACTOR = 1.1D;
 
     private final ElasticsearchClient client;
     private final ObjectMapper objectMapper;
@@ -297,7 +297,7 @@ public class EsBulkImporter {
         }
 
         // 只抽样首条记录，避免在Bulk发送前重复遍历和序列化整批数据。
-        int estimatedDocBytes = Math.max(1, (int) Math.ceil(estimateDocBytes(rows.get(0)) * DOC_SIZE_SAFE_FACTOR));
+        int estimatedDocBytes = Math.max(1, (int) Math.ceil(estimateDocBytes(rows.getFirst()) * DOC_SIZE_SAFE_FACTOR));
         int sizeLimitActions = Math.max(1, maxBulkBytes / estimatedDocBytes);
         return Math.max(1, Math.min(bulkActions, sizeLimitActions));
     }

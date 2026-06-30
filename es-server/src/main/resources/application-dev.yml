@@ -16,19 +16,28 @@ spring:
     username: ${MYSQL_UNM:root}
     password: ${MYSQL_PWD:SADFH28!asoaignljASjacoOs}
 
-sano:
-  es:
-    uris: ${ES_URIS:127.0.0.1:9201}
-    username: ${ES_USERNAME:elastic}
-    password: ${ES_PASSWORD:es2peter}
-    socket-timeout: 600000
-    connection-timeout: 500000
-    connection-request-timeout: 5000
-    max-conn-total: 100
-    max-conn-per-route: 20
+logging:
+  config: classpath:logback-spring.xml
+  file:
+    path: ${LOG_DIR:logs}
+  level:
+    root: INFO
+    com.tsd.sano.es: DEBUG
+    com.tsd.sano.es.importer: DEBUG
+    org.springframework: INFO
+    org.springframework.jdbc.core: DEBUG
+    co.elastic.clients: INFO
+    org.elasticsearch.client: WARN
+    io.lettuce.core: INFO
+    com.zaxxer.hikari: INFO
 
-
 sano:
+  log:
+    # 开发环境保留周期短，便于本地排查时快速滚动。
+    max-file-size: 50MB
+    max-history: 7
+    total-size-cap: 2GB
+    async-queue-size: 2048
   es:
     uris: ${ES_URIS:127.0.0.1:9201}
     username: ${ES_USERNAME:elastic}
