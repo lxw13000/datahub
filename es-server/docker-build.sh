@@ -26,9 +26,13 @@ if [ "$IMAGE_TAG" = "--push" ]; then
 fi
 
 FULL_IMAGE="${IMAGE_NAME}:${IMAGE_TAG}"
+LATEST_IMAGE="${IMAGE_NAME}:latest"
 
 echo
 echo "[INFO] Image: ${FULL_IMAGE}"
+if [ "$IMAGE_TAG" != "latest" ]; then
+  echo "[INFO] Latest alias: ${LATEST_IMAGE}"
+fi
 echo
 
 echo "[INFO] Build Spring Boot jar by local Maven..."
@@ -36,11 +40,22 @@ mvn -q -DskipTests clean package
 
 if [ "$PUSH_FLAG" = "--push" ]; then
   echo "[INFO] Build multi-arch image and push to Docker Hub..."
-  docker buildx build --platform linux/amd64,linux/arm64 -t "${FULL_IMAGE}" --push .
+  if [ "$IMAGE_TAG" = "latest" ]; then
+    docker buildx build --platform linux/amd64,linux/arm64 -t "${FULL_IMAGE}" --push .
+  else
+    docker buildx build --platform linux/amd64,linux/arm64 -t "${FULL_IMAGE}" -t "${LATEST_IMAGE}" --push .
+  fi
 else
   echo "[INFO] Build local image..."
-  docker build -t "${FULL_IMAGE}" .
+  if [ "$IMAGE_TAG" = "latest" ]; then
+    docker build -t "${FULL_IMAGE}" .
+  else
+    docker build -t "${FULL_IMAGE}" -t "${LATEST_IMAGE}" .
+  fi
 fi
 
 echo
 echo "[INFO] Docker build success: ${FULL_IMAGE}"
+if [ "$IMAGE_TAG" != "latest" ]; then
+  echo "[INFO] Docker latest updated: ${LATEST_IMAGE}"
+fi

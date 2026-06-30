@@ -10,6 +10,7 @@ CONTAINER_NAME="${CONTAINER_NAME:-sano-es-server}"
 IMAGE_NAME="${ES_SERVER_IMAGE:-lxw13000/sano-es-server}"
 IMAGE_TAG="${ES_SERVER_IMAGE_TAG:-latest}"
 IMAGE="${IMAGE_NAME}:${IMAGE_TAG}"
+LATEST_TAG="latest"
 NETWORK_NAME="${NETWORK_NAME:-sano-net}"
 SERVER_PORT="${SERVER_PORT:-8002}"
 START_TIMEOUT="${START_TIMEOUT:-180}"
@@ -128,7 +129,18 @@ remove_old_images() {
 
 pull_image() {
   log "拉取镜像：${IMAGE}"
-  docker pull "${IMAGE}"
+  if docker pull "${IMAGE}"; then
+    return 0
+  fi
+
+  if [ "${IMAGE_TAG}" = "${LATEST_TAG}" ]; then
+    fail "latest 镜像拉取失败：${IMAGE}"
+  fi
+
+  log "WARN: 指定镜像 ${IMAGE} 拉取失败，回退到 ${IMAGE_NAME}:${LATEST_TAG}。"
+  IMAGE_TAG="${LATEST_TAG}"
+  IMAGE="${IMAGE_NAME}:${IMAGE_TAG}"
+  docker pull "${IMAGE}" || fail "fallback 镜像拉取失败：${IMAGE}"
 }
 
 start_service() {
