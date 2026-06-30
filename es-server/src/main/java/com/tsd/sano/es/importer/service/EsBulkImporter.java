@@ -252,7 +252,7 @@ public class EsBulkImporter {
                     requestSize, success, failed, costMs);
         }
 
-        if (bulkCount % BULK_PROGRESS_LOG_INTERVAL == 0 || failed > 0) {
+        if (bulkCount <= 5 || bulkCount % BULK_PROGRESS_LOG_INTERVAL == 0 || failed > 0) {
             log.info("===> ES-Import bulk progress. bulkCount={}, requestSize={}, success={}, failed={}, costMs={}, totalSuccess={}, totalFailed={}",
                     bulkCount,
                     requestSize,

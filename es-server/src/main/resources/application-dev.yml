@@ -25,7 +25,7 @@ logging:
     com.tsd.sano.es: DEBUG
     com.tsd.sano.es.importer: DEBUG
     org.springframework: INFO
-    org.springframework.jdbc.core: DEBUG
+    org.springframework.jdbc.core: INFO
     co.elastic.clients: INFO
     org.elasticsearch.client: WARN
     io.lettuce.core: INFO
@@ -54,15 +54,15 @@ sano:
       # 每天02:30导入昨天的数据
       cron: "0 30 2 * * ?"
       # 每批读取数据库数量
-      read-batch-size: 3000
+      read-batch-size: 8000
       # Bulk线程数
       worker-count: 4
       # BlockingQueue 队列缓存容量
       queue-capacity: 30
       # 每次Bulk文档数
-      bulk-actions: 3000
+      bulk-actions: 5000
       # 或每次bulk累计8MB立即发送，单位MB
-      bulk-size-mb: 8
+      bulk-size-mb: 10
       # 最大重试次数
       retry-times: 3
       # Retry等待(ms)

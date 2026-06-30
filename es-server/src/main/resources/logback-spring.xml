@@ -19,8 +19,12 @@
     <!-- 应用名，用于日志文件命名。 -->
     <springProperty scope="context" name="APP_NAME" source="spring.application.name" defaultValue="es-server"/>
 
-    <!-- 日志目录，开发默认项目 logs，生产建议通过 LOG_DIR 挂载到容器外部目录。 -->
+    <!-- 日志根目录，开发默认项目 logs，生产建议通过 LOG_DIR 挂载到容器外部目录。 -->
     <springProperty scope="context" name="LOG_DIR" source="logging.file.path" defaultValue="logs"/>
+
+    <!-- 每天一个日期目录，格式如 logs/20260630/es-server.log。 -->
+    <timestamp key="LOG_DATE" datePattern="yyyyMMdd"/>
+    <property name="LOG_DAY_DIR" value="${LOG_DIR}/${LOG_DATE}"/>
 
     <!-- 滚动策略参数，由不同环境的 yml 分别控制。 -->
     <springProperty scope="context" name="MAX_FILE_SIZE" source="sano.log.max-file-size" defaultValue="100MB"/>
@@ -58,9 +62,9 @@
 
     <!-- ===================== 全量文件日志 ===================== -->
     <appender name="FILE" class="ch.qos.logback.core.rolling.RollingFileAppender">
-        <file>${LOG_DIR}/${APP_NAME}.log</file>
+        <file>${LOG_DAY_DIR}/${APP_NAME}.log</file>
         <rollingPolicy class="ch.qos.logback.core.rolling.SizeAndTimeBasedRollingPolicy">
-            <fileNamePattern>${LOG_DIR}/${APP_NAME}.%d{yyyy-MM-dd}.%i.log.gz</fileNamePattern>
+            <fileNamePattern>${LOG_DIR}/%d{yyyyMMdd}/${APP_NAME}.%i.log.gz</fileNamePattern>
             <maxFileSize>${MAX_FILE_SIZE}</maxFileSize>
             <maxHistory>${MAX_HISTORY}</maxHistory>
             <totalSizeCap>${TOTAL_SIZE_CAP}</totalSizeCap>
@@ -73,14 +77,14 @@
 
     <!-- ===================== 错误文件日志 ===================== -->
     <appender name="ERROR_FILE" class="ch.qos.logback.core.rolling.RollingFileAppender">
-        <file>${LOG_DIR}/${APP_NAME}-error.log</file>
+        <file>${LOG_DAY_DIR}/${APP_NAME}-error.log</file>
         <filter class="ch.qos.logback.classic.filter.LevelFilter">
             <level>ERROR</level>
             <onMatch>ACCEPT</onMatch>
             <onMismatch>DENY</onMismatch>
         </filter>
         <rollingPolicy class="ch.qos.logback.core.rolling.SizeAndTimeBasedRollingPolicy">
-            <fileNamePattern>${LOG_DIR}/${APP_NAME}-error.%d{yyyy-MM-dd}.%i.log.gz</fileNamePattern>
+            <fileNamePattern>${LOG_DIR}/%d{yyyyMMdd}/${APP_NAME}-error.%i.log.gz</fileNamePattern>
             <maxFileSize>${MAX_FILE_SIZE}</maxFileSize>
             <maxHistory>${MAX_HISTORY}</maxHistory>
             <totalSizeCap>${TOTAL_SIZE_CAP}</totalSizeCap>
@@ -93,9 +97,9 @@
 
     <!-- ===================== ES导入专项日志 ===================== -->
     <appender name="IMPORT_FILE" class="ch.qos.logback.core.rolling.RollingFileAppender">
-        <file>${LOG_DIR}/${APP_NAME}-import.log</file>
+        <file>${LOG_DAY_DIR}/${APP_NAME}-import.log</file>
         <rollingPolicy class="ch.qos.logback.core.rolling.SizeAndTimeBasedRollingPolicy">
-            <fileNamePattern>${LOG_DIR}/${APP_NAME}-import.%d{yyyy-MM-dd}.%i.log.gz</fileNamePattern>
+            <fileNamePattern>${LOG_DIR}/%d{yyyyMMdd}/${APP_NAME}-import.%i.log.gz</fileNamePattern>
             <maxFileSize>${MAX_FILE_SIZE}</maxFileSize>
             <maxHistory>${MAX_HISTORY}</maxHistory>
             <totalSizeCap>${TOTAL_SIZE_CAP}</totalSizeCap>
