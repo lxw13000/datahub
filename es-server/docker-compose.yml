@@ -11,14 +11,22 @@ services:
     image: lxw13000/sano/es-server:latest
     container_name: es-server
     restart: unless-stopped
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "100m"
+        max-file: "5"
+    cpus: "1.5"
+    mem_limit: 1536m
+    mem_reservation: 1g
     environment:
       TZ: Asia/Shanghai
       SPRING_PROFILES_ACTIVE: prod
       SERVER_PORT: 8002
       LOG_DIR: /app/logs/es-server
 
-      # Java运行参数，可按服务器资源调整。
-      JAVA_OPTS: "-Xms512m -Xmx1g -XX:+UseG1GC -XX:MaxGCPauseMillis=200"
+      # Java运行参数。正式服务器还有其他服务时，限制导入服务资源占用。
+      JAVA_OPTS: "-Xms768m -Xmx1g -XX:+UseG1GC -XX:MaxGCPauseMillis=200 -XX:+HeapDumpOnOutOfMemoryError -XX:HeapDumpPath=/app/logs/es-server"
 
       # MySQL配置。生产部署建议通过环境变量覆盖默认值。
       MYSQL_UNM: ${MYSQL_UNM:-admin}

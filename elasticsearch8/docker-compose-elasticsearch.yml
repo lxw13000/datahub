@@ -8,7 +8,22 @@ services:
     image: docker.elastic.co/elasticsearch/elasticsearch:8.19.16
     container_name: elasticsearch8
     restart: unless-stopped
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "100m"
+        max-file: "5"
     privileged: true
+    cpus: "4.0"
+    mem_limit: 6g
+    mem_reservation: 4g
+    ulimits:
+      memlock:
+        soft: -1
+        hard: -1
+      nofile:
+        soft: 65535
+        hard: 65535
     volumes:                                  # 数据卷挂载路径设置,将本机目录映射到容器目录
       - "./data:/usr/share/elasticsearch/data"
       - "./logs:/usr/share/elasticsearch/logs"
@@ -20,7 +35,8 @@ services:
       TZ: Asia/Shanghai
       LANG: en_US.UTF-8
       discovery.type: single-node
-      ES_JAVA_OPTS: "-Xmx2g -Xms2g"
+      bootstrap.memory_lock: "true"
+      ES_JAVA_OPTS: "-Xms3g -Xmx3g -XX:+UseG1GC -XX:MaxGCPauseMillis=200"
       ELASTIC_PASSWORD: "es2peter" # elastic账号密码
     ports:
       - "9201:9200"
