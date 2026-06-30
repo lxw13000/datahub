@@ -10,13 +10,13 @@ set -eu
 #   ./docker-build.sh v1.0.0 --push
 #
 # Default:
-#   Build local single-arch image lxw13000/sano/es-server:latest
+#   Build local single-arch image lxw13000/sano-es-server:latest
 #
 # With --push:
 #   Build and push linux/amd64 + linux/arm64 image by docker buildx
 # ============================================================
 
-IMAGE_NAME="lxw13000/sano/es-server"
+IMAGE_NAME="lxw13000/sano-es-server"
 IMAGE_TAG="${1:-latest}"
 PUSH_FLAG="${2:-}"
 

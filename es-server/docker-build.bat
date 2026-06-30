@@ -10,13 +10,13 @@ REM   docker-build.bat v1.0.0
 REM   docker-build.bat v1.0.0 --push
 REM
 REM Default:
-REM   Build local single-arch image lxw13000/sano/es-server:latest
+REM   Build local single-arch image lxw13000/sano-es-server:latest
 REM
 REM With --push:
 REM   Build and push linux/amd64 + linux/arm64 image by docker buildx
 REM ============================================================
 
-set IMAGE_NAME=lxw13000/sano/es-server
+set IMAGE_NAME=lxw13000/sano-es-server
 set IMAGE_TAG=%~1
 set PUSH_FLAG=%~2
 

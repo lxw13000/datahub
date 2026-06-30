@@ -5,7 +5,7 @@
 #
 # eclipse-temurin 官方镜像支持 linux/amd64 和 linux/arm64。
 # 如需构建多架构镜像：
-# docker buildx build --platform linux/amd64,linux/arm64 -t lxw13000/sano/es-server:latest .
+# docker buildx build --platform linux/amd64,linux/arm64 -t lxw13000/sano-es-server:latest .
 ##
 
 FROM eclipse-temurin:21-jre-jammy

@@ -8,7 +8,7 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
-    image: lxw13000/sano/es-server:latest
+    image: ${ES_SERVER_IMAGE:-lxw13000/sano-es-server}:${ES_SERVER_IMAGE_TAG:-latest}
     container_name: es-server
     restart: unless-stopped
     logging:
