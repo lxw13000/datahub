@@ -1,0 +1,8 @@
+target/*
+!target/es-server-*.jar
+.git/
+.idea/
+.mvn/wrapper/maven-wrapper.jar
+logs/
+*.log
+HELP.md

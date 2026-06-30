@@ -1,0 +1,34 @@
+networks:
+  default:
+    external: true
+    name: sano-net
+
+services:
+  es-server:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: lxw13000/sano/es-server:latest
+    container_name: es-server
+    restart: unless-stopped
+    environment:
+      TZ: Asia/Shanghai
+      SPRING_PROFILES_ACTIVE: prod
+      SERVER_PORT: 8002
+      LOG_DIR: /app/logs/es-server
+
+      # Java运行参数，可按服务器资源调整。
+      JAVA_OPTS: "-Xms512m -Xmx1g -XX:+UseG1GC -XX:MaxGCPauseMillis=200"
+
+      # MySQL配置。生产部署建议通过环境变量覆盖默认值。
+      MYSQL_UNM: ${MYSQL_UNM:-admin}
+      MYSQL_PWD: ${MYSQL_PWD:-fl#alHGaldsj!skgnn2850allgnJsHg}
+
+      # ES配置。容器间通过共享Docker网络访问ES内部端口。
+      ES_URIS: ${ES_URIS:-elasticsearch8:9200}
+      ES_USERNAME: ${ES_USERNAME:-elastic}
+      ES_PASSWORD: ${ES_PASSWORD:-es2peter}
+    ports:
+      - "8002:8002"
+    volumes:
+      - ./logs:/app/logs/es-server
