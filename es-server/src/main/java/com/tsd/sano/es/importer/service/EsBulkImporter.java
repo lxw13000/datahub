@@ -38,6 +38,11 @@ public class EsBulkImporter {
     private static final Logger log = LoggerFactory.getLogger(EsBulkImporter.class);
 
     /**
+     * 导入失败ID专项日志，独立输出到 es-server-import-error.log。
+     */
+    private static final Logger importErrorLog = LoggerFactory.getLogger("com.tsd.sano.es.importer.error");
+
+    /**
      * 字节换算单位，用于bulkSizeMb配置转字节。
      */
     private static final int MB = 1024 * 1024;
@@ -171,6 +176,7 @@ public class EsBulkImporter {
                 if (attempt >= maxAttempt) {
                     // 请求级失败说明本批数据没有可靠写入，继续执行会得到不完整索引。
                     context.getStatistics().getFailed().addAndGet(rows.size());
+                    logRequestFailedIds(context, rows, e.getMessage());
                     throw new BusinessException("ES bulk import failed after retry, size=" + rows.size()
                             + ", error=" + e.getMessage(), e);
                 }
@@ -202,6 +208,7 @@ public class EsBulkImporter {
             String documentId = extractDocumentId(row, idColumn);
             if (StringUtils.isBlank(documentId)) {
                 context.getStatistics().getFailed().incrementAndGet();
+                logImportFailedId(context, null, "blank_document_id", "document id is blank, idColumn=" + idColumn);
                 log.warn("===> ES-Import skip row because document id is blank. idColumn={}, row={}", idColumn, row);
                 continue;
             }
@@ -244,7 +251,7 @@ public class EsBulkImporter {
 
         if (response.errors()) {
             // 只打印有限条错误明细，完整失败数量进入统计对象。
-            logBulkErrors(response);
+            logBulkErrors(context, response);
         }
 
         if (costMs >= SLOW_BULK_WARN_MS) {
@@ -267,12 +274,15 @@ public class EsBulkImporter {
     /**
      * 打印Bulk item级失败明细。
      */
-    private void logBulkErrors(BulkResponse response) {
+    private void logBulkErrors(ImportContext context, BulkResponse response) {
         int count = 0;
         for (BulkResponseItem item : response.items()) {
             if (item.error() == null) {
                 continue;
             }
+
+            logImportFailedId(context, item.id(), String.valueOf(item.status()), item.error().reason());
+
             log.warn("===> ES-Import bulk item failed. id={}, status={}, reason={}",
                     item.id(), item.status(), item.error().reason());
             count++;
@@ -281,6 +291,35 @@ public class EsBulkImporter {
                 break;
             }
         }
+    }
+
+    /**
+     * 记录请求级失败涉及的全部文档ID。
+     */
+    private void logRequestFailedIds(ImportContext context, List<Map<String, Object>> rows, String reason) {
+        EsImportConfig config = requireConfig(context);
+        String idColumn = requireText(config.getIdColumn(), "idColumn");
+
+        for (Map<String, Object> row : rows) {
+            String documentId = extractDocumentId(row, idColumn);
+            logImportFailedId(context, documentId, "bulk_request_failed", reason);
+        }
+    }
+
+    /**
+     * 输出导入失败ID专项日志。
+     *
+     * <p>格式突出表名和ID，便于直接回查数据源。</p>
+     */
+    private void logImportFailedId(ImportContext context, String documentId, String status, String reason) {
+        EsImportConfig config = requireConfig(context);
+        importErrorLog.error("===> ES-Import failed document. table={} id:{} index={} alias={} status={} reason={}",
+                config.getTableName(),
+                StringUtils.defaultIfBlank(documentId, "UNKNOWN"),
+                config.getIndexName(),
+                config.getIndexAlias(),
+                status,
+                reason);
     }
 
     /**
