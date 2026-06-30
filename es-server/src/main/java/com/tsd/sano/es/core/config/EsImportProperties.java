@@ -20,7 +20,7 @@ public class EsImportProperties {
     /**
      * 每批读取数据库数量
      */
-    private int pageSize = 3000;
+    private int readBatchSize = 3000;
 
     /**
      * Bulk线程数
@@ -94,12 +94,12 @@ public class EsImportProperties {
 
     //============== getter/setter ===================
 
-    public int getPageSize() {
-        return pageSize;
+    public int getReadBatchSize() {
+        return readBatchSize;
     }
 
-    public void setPageSize(int pageSize) {
-        this.pageSize = pageSize;
+    public void setReadBatchSize(int readBatchSize) {
+        this.readBatchSize = readBatchSize;
     }
 
     public int getWorkerCount() {

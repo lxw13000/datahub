@@ -75,7 +75,7 @@ public class JdbcDataReader {
     public void readToQueue(ImportContext context) {
         EsImportConfig config = requireConfig(context);
         String idColumn = requireColumnName(config.getIdColumn(), "idColumn");
-        int pageSize = context.getProperties().getPageSize();
+        int pageSize = context.getProperties().getReadBatchSize();
         long lastId = context.getStatistics().getLastId();
 
         while (true) {
