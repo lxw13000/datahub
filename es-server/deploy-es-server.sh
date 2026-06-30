@@ -75,10 +75,11 @@ ensure_prerequisites() {
   # 容器内应用用户固定为 10001:10001，授权失败时给出提示但不中断，兼容无 sudo 环境。
   if command -v sudo >/dev/null 2>&1; then
     sudo chown -R 10001:10001 "${SCRIPT_DIR}/logs" || log "WARN: logs 目录授权失败，请手动执行 sudo chown -R 10001:10001 logs"
+    sudo chmod 755 "${SCRIPT_DIR}/logs" || log "WARN: logs 目录权限修改失败，请手动执行 sudo chmod 755 logs"
   else
     chown -R 10001:10001 "${SCRIPT_DIR}/logs" || log "WARN: logs 目录授权失败，请手动执行 chown -R 10001:10001 logs"
+    chmod 755 "${SCRIPT_DIR}/logs" || log "WARN: logs 目录权限修改失败，请手动执行 chmod 755 logs"
   fi
-  chmod 755 "${SCRIPT_DIR}/logs" || true
 }
 
 stop_and_remove_old_container() {
@@ -102,12 +103,26 @@ stop_and_remove_old_container() {
   fi
 }
 
-remove_old_image() {
+remove_old_images() {
+  local image_refs
+
+  image_refs="$(docker image ls "${IMAGE_NAME}" --format '{{.Repository}}:{{.Tag}}' | grep -v '<none>' || true)"
+
+  if [ -z "${image_refs}" ]; then
+    log "本地不存在 ${IMAGE_NAME} 相关旧镜像。"
+    return 0
+  fi
+
+  log "删除本地 ${IMAGE_NAME} 相关旧镜像："
+  printf '%s\n' "${image_refs}" | while IFS= read -r image_ref; do
+    [ -n "${image_ref}" ] || continue
+    log "删除镜像：${image_ref}"
+    docker rmi -f "${image_ref}" >/dev/null || log "WARN: 镜像 ${image_ref} 删除失败，继续部署。"
+  done
+
   if docker image inspect "${IMAGE}" >/dev/null 2>&1; then
-    log "删除旧镜像：${IMAGE}"
+    log "删除本次目标镜像旧缓存：${IMAGE}"
     docker rmi -f "${IMAGE}" >/dev/null || log "WARN: 镜像 ${IMAGE} 删除失败，继续尝试拉取新镜像。"
-  else
-    log "本地不存在旧镜像：${IMAGE}"
   fi
 }
 
@@ -197,7 +212,7 @@ main() {
   log "开始部署 es-server。image=${IMAGE}, compose=${COMPOSE_FILE}"
   ensure_prerequisites
   stop_and_remove_old_container
-  remove_old_image
+  remove_old_images
   pull_image
   start_service
   wait_until_started
