@@ -1,4 +1,4 @@
-package com.tsd.sano.es.importer1;
+package com.tsd.sano.es.controller;
 
 import lombok.Data;
 

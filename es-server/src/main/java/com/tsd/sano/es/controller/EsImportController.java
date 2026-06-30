@@ -1,4 +1,4 @@
-package com.tsd.sano.es.importer1;
+package com.tsd.sano.es.controller;
 
 import com.tsd.sano.es.importer.service.EsImportService;
 import lombok.RequiredArgsConstructor;
@@ -29,14 +29,7 @@ import org.springframework.web.bind.annotation.RestController;
 @Slf4j
 public class EsImportController {
 
-    private final EsProcessServiceImpl esProcessService;
     private final EsImportService importService;
-
-
-    @GetMapping("/test1")
-    public void getProgress() {
-        esProcessService.toLeadEsData("sano_wallet_coin_record", "sano_wallet_coin_record.json");
-    }
 
 
     @GetMapping("/test2")
