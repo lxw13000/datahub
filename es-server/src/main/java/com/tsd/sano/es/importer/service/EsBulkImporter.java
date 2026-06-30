@@ -52,6 +52,13 @@ public class EsBulkImporter {
      */
     private static final int MAX_ERROR_LOG_COUNT = 10;
 
+    /**
+     * 文档大小估算安全系数。
+     *
+     * <p>当前表结构字段稳定，按首条估算即可；增加20%余量，避免少数字段较长导致Bulk偏大。</p>
+     */
+    private static final double DOC_SIZE_SAFE_FACTOR = 1.2D;
+
     private final ElasticsearchClient client;
     private final ObjectMapper objectMapper;
 
@@ -112,26 +119,19 @@ public class EsBulkImporter {
         EsImportProperties properties = requireProperties(context);
         int bulkActions = Math.max(1, properties.getBulkActions());
         int maxBulkBytes = Math.max(1, properties.getBulkSizeMb()) * MB;
+        int actionLimit = estimateActionLimit(rows, bulkActions, maxBulkBytes);
 
-        // chunk保存本次待发送的Bulk子批次，按数量和字节大小双阈值切分。
-        List<Map<String, Object>> chunk = new ArrayList<>(Math.min(rows.size(), bulkActions));
-        int chunkBytes = 0;
+        // chunk保存本次待发送的Bulk子批次，按配置数量和估算体积计算后的数量阈值切分。
+        List<Map<String, Object>> chunk = new ArrayList<>(Math.min(rows.size(), actionLimit));
 
         for (Map<String, Object> row : rows) {
-            // 估算文档体积，用于避免单个Bulk请求过大。
-            int rowBytes = estimateDocBytes(row);
-            boolean reachActionLimit = chunk.size() >= bulkActions;
-            boolean reachSizeLimit = !chunk.isEmpty() && chunkBytes + rowBytes > maxBulkBytes;
-
-            if (reachActionLimit || reachSizeLimit) {
+            if (chunk.size() >= actionLimit) {
                 // 达到阈值立即发送，避免单次请求过大影响ES稳定性。
                 sendWithRetry(context, chunk);
-                chunk = new ArrayList<>(Math.min(rows.size(), bulkActions));
-                chunkBytes = 0;
+                chunk = new ArrayList<>(Math.min(rows.size(), actionLimit));
             }
 
             chunk.add(row);
-            chunkBytes += rowBytes;
         }
 
         if (!chunk.isEmpty()) {
@@ -283,6 +283,23 @@ public class EsBulkImporter {
             // 估算失败不影响导入，使用保守默认值继续切分。
             return DEFAULT_DOC_BYTES;
         }
+    }
+
+    /**
+     * 根据首条文档估算本批次允许的最大文档数。
+     *
+     * <p>当前同步表字段结构稳定，逐条估算会造成额外JSON序列化开销；按首条估算并加安全系数，
+     * 能在稳定性和性能之间取得更合适的平衡。</p>
+     */
+    private int estimateActionLimit(List<Map<String, Object>> rows, int bulkActions, int maxBulkBytes) {
+        if (rows.isEmpty()) {
+            return bulkActions;
+        }
+
+        // 只抽样首条记录，避免在Bulk发送前重复遍历和序列化整批数据。
+        int estimatedDocBytes = Math.max(1, (int) Math.ceil(estimateDocBytes(rows.get(0)) * DOC_SIZE_SAFE_FACTOR));
+        int sizeLimitActions = Math.max(1, maxBulkBytes / estimatedDocBytes);
+        return Math.max(1, Math.min(bulkActions, sizeLimitActions));
     }
 
     /**
