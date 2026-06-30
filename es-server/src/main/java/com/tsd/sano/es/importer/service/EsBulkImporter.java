@@ -53,6 +53,16 @@ public class EsBulkImporter {
     private static final int MAX_ERROR_LOG_COUNT = 10;
 
     /**
+     * 慢Bulk请求阈值(ms)，超过该值打印warn用于压测观察。
+     */
+    private static final long SLOW_BULK_WARN_MS = 3000L;
+
+    /**
+     * Bulk进度日志打印间隔，避免每批都打印导致日志过多。
+     */
+    private static final long BULK_PROGRESS_LOG_INTERVAL = 20L;
+
+    /**
      * 文档大小估算安全系数。
      *
      * <p>当前表结构字段稳定，按首条估算即可；增加10%余量，避免少数字段较长导致Bulk偏大。</p>
@@ -152,8 +162,10 @@ public class EsBulkImporter {
 
         for (int attempt = 1; attempt <= maxAttempt; attempt++) {
             try {
+                long startTime = System.currentTimeMillis();
                 BulkResponse response = sendBulk(context, rows);
-                handleResponse(context, response);
+                long costMs = System.currentTimeMillis() - startTime;
+                handleResponse(context, response, rows.size(), costMs);
                 return;
             } catch (IOException e) {
                 if (attempt >= maxAttempt) {
@@ -215,7 +227,7 @@ public class EsBulkImporter {
      *
      * <p>ES item级失败只影响对应文档，统计后继续处理后续批次。</p>
      */
-    private void handleResponse(ImportContext context, BulkResponse response) {
+    private void handleResponse(ImportContext context, BulkResponse response, int requestSize, long costMs) {
         if (response == null) {
             // 空响应表示本批没有可发送文档，统计已在构建阶段处理。
             return;
@@ -228,18 +240,28 @@ public class EsBulkImporter {
 
         context.getStatistics().getSuccess().addAndGet(success);
         context.getStatistics().getFailed().addAndGet(failed);
-        context.getStatistics().getBulkCount().incrementAndGet();
+        long bulkCount = context.getStatistics().getBulkCount().incrementAndGet();
 
         if (response.errors()) {
             // 只打印有限条错误明细，完整失败数量进入统计对象。
             logBulkErrors(response);
         }
 
-        log.info("===> ES-Import bulk finished. success={}, failed={}, totalSuccess={}, totalFailed={}",
-                success,
-                failed,
-                context.getStatistics().getSuccess().get(),
-                context.getStatistics().getFailed().get());
+        if (costMs >= SLOW_BULK_WARN_MS) {
+            log.warn("===> ES-Import slow bulk. requestSize={}, success={}, failed={}, costMs={}",
+                    requestSize, success, failed, costMs);
+        }
+
+        if (bulkCount % BULK_PROGRESS_LOG_INTERVAL == 0 || failed > 0) {
+            log.info("===> ES-Import bulk progress. bulkCount={}, requestSize={}, success={}, failed={}, costMs={}, totalSuccess={}, totalFailed={}",
+                    bulkCount,
+                    requestSize,
+                    success,
+                    failed,
+                    costMs,
+                    context.getStatistics().getSuccess().get(),
+                    context.getStatistics().getFailed().get());
+        }
     }
 
     /**
