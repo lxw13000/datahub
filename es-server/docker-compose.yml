@@ -9,7 +9,7 @@ services:
       context: .
       dockerfile: Dockerfile
     image: ${ES_SERVER_IMAGE:-lxw13000/sano-es-server}:${ES_SERVER_IMAGE_TAG:-latest}
-    container_name: es-server
+    container_name: sano-es-server
     restart: unless-stopped
     logging:
       driver: "json-file"
