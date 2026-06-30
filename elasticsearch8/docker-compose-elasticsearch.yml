@@ -1,0 +1,27 @@
+networks:
+  default:
+    external: true
+    name: sano-net
+
+services:
+  elasticsearch8:
+    image: docker.elastic.co/elasticsearch/elasticsearch:8.19.16
+    container_name: elasticsearch8
+    restart: unless-stopped
+    privileged: true
+    volumes:                                  # 数据卷挂载路径设置,将本机目录映射到容器目录
+      - "./data:/usr/share/elasticsearch/data"
+      - "./logs:/usr/share/elasticsearch/logs"
+      - "./config/elasticsearch.yml:/usr/share/elasticsearch/config/elasticsearch.yml"
+      - "./plugins:/usr/share/elasticsearch/plugins"
+      - "./backup:/usr/share/elasticsearch/backup"
+    #      - "./elasticsearch/elastic/config/jvm.options:/usr/share/elasticsearch/config/jvm.options"
+    environment:                              # 设置环境变量,相当于docker run命令中的-e
+      TZ: Asia/Shanghai
+      LANG: en_US.UTF-8
+      discovery.type: single-node
+      ES_JAVA_OPTS: "-Xmx2g -Xms2g"
+      ELASTIC_PASSWORD: "es2peter" # elastic账号密码
+    ports:
+      - "9201:9200"
+      - "9301:9300"

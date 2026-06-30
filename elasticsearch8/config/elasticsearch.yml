@@ -1,0 +1,18 @@
+cluster.name: "docker-cluster"
+network.host: 0.0.0.0
+http.port: 9200
+
+discovery.type: single-node
+
+# 开启es跨域
+http.cors.enabled: true
+http.cors.allow-origin: "*"
+http.cors.allow-headers: Authorization
+# ❌ 关闭安全（关键）
+xpack.security.enabled: false
+xpack.security.transport.ssl.enabled: false
+
+
+http.max_initial_line_length: "8k"
+http.max_header_size: "16k"
+http.max_content_length: 500mb
