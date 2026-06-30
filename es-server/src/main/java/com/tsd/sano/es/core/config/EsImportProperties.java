@@ -53,6 +53,16 @@ public class EsImportProperties {
     private long retryInterval = 1000;
 
     /**
+     * 允许的最大失败文档数，超过后不绑定alias
+     */
+    private long maxFailedDocuments = 1000;
+
+    /**
+     * 允许的最大失败率，0.001表示0.1%
+     */
+    private double maxFailureRate = 0.001D;
+
+    /**
      * 是否开启导入监控
      */
     private boolean enableMonitor = true;
@@ -148,6 +158,22 @@ public class EsImportProperties {
 
     public void setRetryInterval(long retryInterval) {
         this.retryInterval = retryInterval;
+    }
+
+    public long getMaxFailedDocuments() {
+        return maxFailedDocuments;
+    }
+
+    public void setMaxFailedDocuments(long maxFailedDocuments) {
+        this.maxFailedDocuments = maxFailedDocuments;
+    }
+
+    public double getMaxFailureRate() {
+        return maxFailureRate;
+    }
+
+    public void setMaxFailureRate(double maxFailureRate) {
+        this.maxFailureRate = maxFailureRate;
     }
 
     public boolean isEnableMonitor() {

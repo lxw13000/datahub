@@ -32,6 +32,10 @@ sano:
       retry-times: 3
       # Retry等待(ms)
       retry-interval: 1000
+      # 失败文档数超过该值时不绑定alias
+      max-failed-documents: 1000
+      # 失败率超过该值时不绑定alias，0.001 = 0.1%
+      max-failure-rate: 0.001
       # 是否开启导入监控
       enable-monitor: true
 

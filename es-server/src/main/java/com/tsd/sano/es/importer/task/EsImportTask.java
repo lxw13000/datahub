@@ -26,6 +26,9 @@ public class EsImportTask {
     private final EsImportProperties properties;
     private final EsImportService importService;
 
+    /**
+     * 注入导入配置和导入服务。
+     */
     public EsImportTask(EsImportProperties properties, EsImportService importService) {
         this.properties = properties;
         this.importService = importService;
@@ -39,6 +42,7 @@ public class EsImportTask {
         LocalDate importDate = LocalDate.now().minusDays(1);
         log.info("===> ES-Import scheduled task start. date={}", importDate);
 
+        // 多表串行导入，单表异常在importOneTable中隔离处理。
         properties.getTables().stream()
                 .filter(EsImportProperties.TableConfig::isEnabled)
                 .forEach(table -> importOneTable(table, importDate));
@@ -46,16 +50,26 @@ public class EsImportTask {
         log.info("===> ES-Import scheduled task finished. date={}", importDate);
     }
 
+    /**
+     * 导入单张配置表。
+     */
     private void importOneTable(EsImportProperties.TableConfig table, LocalDate importDate) {
-        EsImportConfig config = new EsImportConfig();
-        config.setIndexAlias(table.getIndexAlias());
-        config.setTableName(StringUtils.defaultIfBlank(table.getTableName(), table.getIndexAlias()));
-        config.setMappingFile(table.getMappingFile());
-        config.setWhereSql(table.getWhereSql());
-        config.setIdColumn(table.getIdColumn());
-        config.setDtColumn(table.getDtColumn());
-        config.setImportDate(importDate);
+        try {
+            EsImportConfig config = new EsImportConfig();
+            config.setIndexAlias(table.getIndexAlias());
+            // 表名未配置时默认复用业务alias。
+            config.setTableName(StringUtils.defaultIfBlank(table.getTableName(), table.getIndexAlias()));
+            config.setMappingFile(table.getMappingFile());
+            config.setWhereSql(table.getWhereSql());
+            config.setIdColumn(table.getIdColumn());
+            config.setDtColumn(table.getDtColumn());
+            config.setImportDate(importDate);
 
-        importService.importData(config);
+            importService.importData(config);
+        } catch (Exception e) {
+            // 单表失败不影响后续表导入，错误通过日志汇总。
+            log.error("===> ES-Import scheduled table failed. alias={}, table={}, date={}, error={}",
+                    table.getIndexAlias(), table.getTableName(), importDate, e.getMessage(), e);
+        }
     }
 }

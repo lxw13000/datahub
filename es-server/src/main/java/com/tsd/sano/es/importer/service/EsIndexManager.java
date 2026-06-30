@@ -58,6 +58,9 @@ public class EsIndexManager {
     private final ElasticsearchClient client;
     private final MappingLoader mappingLoader;
 
+    /**
+     * 注入ES客户端和Mapping加载器。
+     */
     public EsIndexManager(ElasticsearchClient client, MappingLoader mappingLoader) {
         this.client = client;
         this.mappingLoader = mappingLoader;
@@ -75,11 +78,13 @@ public class EsIndexManager {
 
         try {
             if (exists(indexName)) {
-                log.info("===> ES-Import index already exists, skip create. index={}", indexName);
-                return true;
+                // 同名索引可能是上次失败留下的半成品，稳定性优先，拒绝复用。
+                throw new BusinessException("ES import target index already exists, index=" + indexName
+                        + ". Please delete the old index or use a new indexName before retry.");
             }
 
             try (InputStream mapping = mappingLoader.load(mappingFile)) {
+                // mapping文件同时包含settings和mappings，直接作为create index请求体。
                 CreateIndexRequest request = new CreateIndexRequest.Builder()
                         .index(indexName)
                         .withJson(mapping)
@@ -186,6 +191,7 @@ public class EsIndexManager {
 
     public boolean exists(String indexName) {
         try {
+            // exists接口用于保护创建流程，避免覆盖已有索引。
             BooleanResponse response = client.indices().exists(request -> request.index(indexName));
             return response.value();
         } catch (IOException | ElasticsearchException e) {
@@ -194,6 +200,9 @@ public class EsIndexManager {
         }
     }
 
+    /**
+     * 更新索引refresh_interval。
+     */
     private void updateRefreshInterval(String indexName, String refreshInterval) {
         try {
             // refresh_interval=-1表示暂停自动刷新，适合批量导入阶段。
@@ -209,8 +218,12 @@ public class EsIndexManager {
         }
     }
 
+    /**
+     * 更新索引副本数。
+     */
     private void updateReplicaCount(String indexName, String replicas) {
         try {
+            // 单机部署通常使用0副本，避免副本无法分配导致集群yellow。
             PutIndicesSettingsResponse response = client.indices().putSettings(request -> request
                     .index(indexName)
                     .settings(settings -> settings.numberOfReplicas(replicas))
@@ -223,10 +236,14 @@ public class EsIndexManager {
         }
     }
 
+    /**
+     * 刷新索引，使本次导入数据可被查询。
+     */
     private void refresh(String indexName) {
         try {
             RefreshResponse response = client.indices().refresh(request -> request.index(indexName));
             if (response.shards() != null) {
+                // 记录成功刷新分片数，便于排查ES分片状态问题。
                 log.info("===> ES-Import refresh index. index={}, successfulShards={}",
                         indexName, response.shards().successful());
             } else {
@@ -238,6 +255,9 @@ public class EsIndexManager {
         }
     }
 
+    /**
+     * 查询业务alias对应的历史真实索引列表。
+     */
     private List<String> listHistoryIndices(String alias) {
         try {
             GetIndexResponse response = client.indices().get(request -> request.index(alias + "_*"));
@@ -245,6 +265,7 @@ public class EsIndexManager {
             return new ArrayList<>(indices.keySet());
         } catch (ElasticsearchException e) {
             if (e.status() == 404) {
+                // 没有历史索引是正常场景，返回空列表即可。
                 return List.of();
             }
             throw new BusinessException("ES list history indices failed, alias=" + alias
@@ -255,6 +276,9 @@ public class EsIndexManager {
         }
     }
 
+    /**
+     * 判断索引日期是否早于保留边界。
+     */
     private boolean isBeforeKeepDate(String alias, String indexName, LocalDate keepAfter) {
         String prefix = alias + "_";
         if (!indexName.startsWith(prefix)) {
@@ -271,11 +295,15 @@ public class EsIndexManager {
             LocalDate indexDate = LocalDate.parse(dateText, INDEX_DATE_FORMATTER);
             return indexDate.isBefore(keepAfter);
         } catch (DateTimeParseException e) {
+            // 日期无法解析时不自动删除，避免误删非标准命名索引。
             log.warn("===> ES-Import skip history index with unparsable date. index={}", indexName);
             return false;
         }
     }
 
+    /**
+     * 删除历史索引，失败只记录日志，不影响本次导入成功结果。
+     */
     private void deleteIndexQuietly(String indexName) {
         try {
             DeleteIndexResponse response = client.indices().delete(request -> request.index(indexName));
@@ -286,6 +314,9 @@ public class EsIndexManager {
         }
     }
 
+    /**
+     * 校验导入上下文并返回业务配置。
+     */
     private EsImportConfig requireConfig(ImportContext context) {
         if (context == null || context.getConfig() == null) {
             throw new BusinessException("ES import context config cannot be null");
@@ -293,6 +324,9 @@ public class EsIndexManager {
         return context.getConfig();
     }
 
+    /**
+     * 校验并返回导入全局参数。
+     */
     private EsImportProperties requireProperties(ImportContext context) {
         if (context == null || context.getProperties() == null) {
             throw new BusinessException("ES import properties cannot be null");
@@ -300,6 +334,9 @@ public class EsIndexManager {
         return context.getProperties();
     }
 
+    /**
+     * 校验必填字符串参数。
+     */
     private String requireText(String value, String fieldName) {
         if (StringUtils.isBlank(value)) {
             throw new BusinessException("ES import " + fieldName + " cannot be blank");

@@ -21,6 +21,7 @@ public class ImportMonitor {
      * 记录导入开始信息。
      */
     public void onStart(ImportContext context) {
+        // 记录任务维度信息，便于从日志定位具体表和索引。
         log.info("===> ES-Import monitor start. alias={}, index={}, table={}, date={}",
                 context.getConfig().getIndexAlias(),
                 context.getConfig().getIndexName(),
@@ -33,6 +34,7 @@ public class ImportMonitor {
      */
     public void onFinish(ImportContext context) {
         ImportStatistics statistics = context.getStatistics();
+        // costMs基于上下文统计时间计算，防御异常场景下出现负数。
         long costMs = Math.max(0, statistics.getEndTime() - statistics.getStartTime());
         log.info("===> ES-Import monitor finish. alias={}, total={}, read={}, success={}, failed={}, bulkCount={}, costMs={}",
                 context.getConfig().getIndexAlias(),
@@ -49,6 +51,7 @@ public class ImportMonitor {
      */
     public void onError(ImportContext context, Exception error) {
         ImportStatistics statistics = context.getStatistics();
+        // 失败日志输出当前进度，便于判断失败发生在读取阶段还是写入阶段。
         log.error("===> ES-Import monitor failed. alias={}, total={}, read={}, success={}, failed={}, error={}",
                 context.getConfig().getIndexAlias(),
                 statistics.getTotal().get(),

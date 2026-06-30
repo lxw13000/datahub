@@ -7,6 +7,8 @@ import java.util.List;
 import java.util.Map;
 import java.util.concurrent.BlockingQueue;
 import java.util.concurrent.LinkedBlockingQueue;
+import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicReference;
 
 /**
  * 导入上下文
@@ -41,6 +43,21 @@ public class ImportContext {
      */
     private BlockingQueue<List<Map<String, Object>>> queue;
 
+    /**
+     * 导入中止标记。
+     *
+     * <p>Bulk线程异常时通过该标记通知Reader停止入队，避免Reader永久阻塞。</p>
+     */
+    private final AtomicBoolean aborted = new AtomicBoolean(false);
+
+    /**
+     * 导入中止原因，便于上层输出明确错误。
+     */
+    private final AtomicReference<Throwable> abortReason = new AtomicReference<>();
+
+    /**
+     * 创建一次导入上下文，并初始化Reader到Bulk的队列。
+     */
     public ImportContext(EsImportConfig config,
                          ImportStatistics statistics,
                          EsImportProperties properties) {
@@ -68,5 +85,21 @@ public class ImportContext {
 
     public BlockingQueue<List<Map<String, Object>>> getQueue() {
         return queue;
+    }
+
+    /**
+     * 标记本次导入需要中止，只保留第一个异常原因。
+     */
+    public void abort(Throwable error) {
+        aborted.set(true);
+        abortReason.compareAndSet(null, error);
+    }
+
+    public boolean isAborted() {
+        return aborted.get();
+    }
+
+    public Throwable getAbortReason() {
+        return abortReason.get();
     }
 }

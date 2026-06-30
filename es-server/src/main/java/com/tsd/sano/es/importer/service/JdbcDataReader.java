@@ -14,6 +14,7 @@ import java.time.format.DateTimeFormatter;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.TimeUnit;
 import java.util.regex.Pattern;
 
 /**
@@ -46,8 +47,18 @@ public class JdbcDataReader {
      */
     private static final DateTimeFormatter DT_FORMATTER = DateTimeFormatter.ISO_LOCAL_DATE;
 
+    /**
+     * 队列入队等待时间。
+     *
+     * <p>使用超时offer而不是永久put，便于及时感知Bulk线程失败。</p>
+     */
+    private static final long QUEUE_OFFER_TIMEOUT_SECONDS = 1L;
+
     private final JdbcTemplate jdbcTemplate;
 
+    /**
+     * 注入JDBC访问组件。
+     */
     public JdbcDataReader(JdbcTemplate jdbcTemplate) {
         this.jdbcTemplate = jdbcTemplate;
     }
@@ -60,6 +71,7 @@ public class JdbcDataReader {
         QueryCondition condition = buildCondition(config);
         String tableName = requireTableName(config.getTableName());
 
+        // 表名已做白名单校验，查询条件参数仍通过JDBC占位符传入。
         String sql = "SELECT COUNT(1) FROM " + tableName + " WHERE " + condition.whereSql();
         Long total = jdbcTemplate.queryForObject(sql, Long.class, condition.params().toArray());
         long totalCount = total == null ? 0L : total;
@@ -79,14 +91,19 @@ public class JdbcDataReader {
         long lastId = context.getStatistics().getLastId();
 
         while (true) {
+            // 每轮读取前检查Bulk侧是否已失败，避免继续压入数据。
+            checkAbort(context);
+
             List<Map<String, Object>> rows = fetchPage(context, lastId, pageSize);
             if (rows.isEmpty()) {
+                // 没有更多数据时通知所有Bulk工作线程退出。
                 offerEndSignals(context);
                 log.info("===> ES-Import read finished. table={}, read={}",
                         config.getTableName(), context.getStatistics().getRead().get());
                 return;
             }
 
+            // 使用当前页最后一条ID作为下一页游标，避免offset深分页。
             lastId = extractLastId(rows, idColumn);
             context.getStatistics().setLastId(lastId);
             context.getStatistics().getRead().addAndGet(rows.size());
@@ -114,6 +131,7 @@ public class JdbcDataReader {
         params.add(lastId);
         params.add(pageSize);
 
+        // idColumn和tableName已校验，只拼接标识符；值全部使用参数绑定。
         String sql = "SELECT * FROM " + tableName
                 + " WHERE " + condition.whereSql()
                 + " AND " + idColumn + " > ?"
@@ -131,6 +149,7 @@ public class JdbcDataReader {
      */
     private QueryCondition buildCondition(EsImportConfig config) {
         if (StringUtils.isNotBlank(config.getWhereSql())) {
+            // whereSql用于复杂场景，需由可信配置提供，不接收外部请求参数。
             return new QueryCondition("(" + config.getWhereSql().trim() + ")", List.of());
         }
 
@@ -140,6 +159,7 @@ public class JdbcDataReader {
             throw new BusinessException("ES import importDate cannot be null when whereSql is blank");
         }
 
+        // 默认T+1场景按日期分区字段过滤，参数化传入日期值。
         return new QueryCondition(dtColumn + " = ?", List.of(DT_FORMATTER.format(importDate)));
     }
 
@@ -148,11 +168,27 @@ public class JdbcDataReader {
      */
     private void offerBatch(ImportContext context, List<Map<String, Object>> rows) {
         try {
-            context.getQueue().put(rows);
+            while (!context.getQueue().offer(rows, QUEUE_OFFER_TIMEOUT_SECONDS, TimeUnit.SECONDS)) {
+                // 队列满时持续检查中止标记，避免Bulk已失败但Reader仍永久等待。
+                checkAbort(context);
+            }
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
             throw new BusinessException("ES import reader interrupted while waiting queue", e);
         }
+    }
+
+    /**
+     * 检查导入是否已被Bulk线程标记为中止。
+     */
+    private void checkAbort(ImportContext context) {
+        if (!context.isAborted()) {
+            return;
+        }
+
+        Throwable reason = context.getAbortReason();
+        String message = reason == null ? "unknown" : reason.getMessage();
+        throw new BusinessException("ES import reader stopped because bulk importer failed, error=" + message, reason);
     }
 
     /**
@@ -161,6 +197,7 @@ public class JdbcDataReader {
     private void offerEndSignals(ImportContext context) {
         int workerCount = context.getProperties().getWorkerCount();
         for (int i = 0; i < workerCount; i++) {
+            // 每个Bulk工作线程需要一个空批次作为结束信号。
             offerBatch(context, List.of());
         }
     }
@@ -177,9 +214,11 @@ public class JdbcDataReader {
             throw new BusinessException("ES import idColumn value cannot be null, idColumn=" + idColumn);
         }
         if (value instanceof Number number) {
+            // 数据库数字类型可直接转换为long游标。
             return number.longValue();
         }
         try {
+            // 兼容JDBC驱动将数字ID返回为字符串的情况。
             return Long.parseLong(value.toString());
         } catch (NumberFormatException e) {
             throw new BusinessException("ES import idColumn must be numeric, idColumn=" + idColumn
@@ -227,6 +266,9 @@ public class JdbcDataReader {
         return value;
     }
 
+    /**
+     * 校验必填字符串参数。
+     */
     private String requireText(String value, String fieldName) {
         if (StringUtils.isBlank(value)) {
             throw new BusinessException("ES import " + fieldName + " cannot be blank");
@@ -234,6 +276,9 @@ public class JdbcDataReader {
         return value.trim();
     }
 
+    /**
+     * 查询条件及其参数。
+     */
     private record QueryCondition(String whereSql, List<Object> params) {
     }
 }

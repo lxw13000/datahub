@@ -19,7 +19,6 @@ import java.io.IOException;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
-import java.util.UUID;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
@@ -49,13 +48,6 @@ public class EsBulkImporter {
     private static final int DEFAULT_DOC_BYTES = 1024;
 
     /**
-     * 自动生成文档ID的前缀。
-     *
-     * <p>仅在业务ID缺失时兜底使用，正常数据必须优先使用数据库主键。</p>
-     */
-    private static final String GENERATED_ID_PREFIX = "generated_";
-
-    /**
      * 失败明细最多打印条数，避免大量错误刷屏。
      */
     private static final int MAX_ERROR_LOG_COUNT = 10;
@@ -63,6 +55,9 @@ public class EsBulkImporter {
     private final ElasticsearchClient client;
     private final ObjectMapper objectMapper;
 
+    /**
+     * 注入ES客户端和JSON工具，JSON工具用于估算单条文档体积。
+     */
     public EsBulkImporter(ElasticsearchClient client, ObjectMapper objectMapper) {
         this.client = client;
         this.objectMapper = objectMapper;
@@ -80,9 +75,11 @@ public class EsBulkImporter {
             List<Future<?>> futures = new ArrayList<>(workerCount);
 
             for (int i = 0; i < workerCount; i++) {
+                // 每个工作线程独立消费队列，提升Bulk写入吞吐。
                 futures.add(executor.submit(() -> consumeQueue(context)));
             }
 
+            // 不再接收新任务，等待已提交的Bulk工作线程结束。
             executor.shutdown();
             waitWorkersDone(executor, futures);
         }
@@ -92,12 +89,19 @@ public class EsBulkImporter {
      * 单个工作线程循环消费队列，空批次表示Reader已结束。
      */
     private void consumeQueue(ImportContext context) {
-        while (true) {
-            List<Map<String, Object>> rows = takeBatch(context);
-            if (rows.isEmpty()) {
-                return;
+        try {
+            while (true) {
+                List<Map<String, Object>> rows = takeBatch(context);
+                if (rows.isEmpty()) {
+                    // Reader投递空集合表示没有更多数据，当前工作线程正常退出。
+                    return;
+                }
+                importRows(context, rows);
             }
-            importRows(context, rows);
+        } catch (RuntimeException e) {
+            // 任意Bulk线程失败都要通知Reader停止生产，避免队列写入侧卡死。
+            context.abort(e);
+            throw e;
         }
     }
 
@@ -109,15 +113,18 @@ public class EsBulkImporter {
         int bulkActions = Math.max(1, properties.getBulkActions());
         int maxBulkBytes = Math.max(1, properties.getBulkSizeMb()) * MB;
 
+        // chunk保存本次待发送的Bulk子批次，按数量和字节大小双阈值切分。
         List<Map<String, Object>> chunk = new ArrayList<>(Math.min(rows.size(), bulkActions));
         int chunkBytes = 0;
 
         for (Map<String, Object> row : rows) {
+            // 估算文档体积，用于避免单个Bulk请求过大。
             int rowBytes = estimateDocBytes(row);
             boolean reachActionLimit = chunk.size() >= bulkActions;
             boolean reachSizeLimit = !chunk.isEmpty() && chunkBytes + rowBytes > maxBulkBytes;
 
             if (reachActionLimit || reachSizeLimit) {
+                // 达到阈值立即发送，避免单次请求过大影响ES稳定性。
                 sendWithRetry(context, chunk);
                 chunk = new ArrayList<>(Math.min(rows.size(), bulkActions));
                 chunkBytes = 0;
@@ -128,6 +135,7 @@ public class EsBulkImporter {
         }
 
         if (!chunk.isEmpty()) {
+            // 发送最后不足阈值的一批数据。
             sendWithRetry(context, chunk);
         }
     }
@@ -157,6 +165,7 @@ public class EsBulkImporter {
 
                 log.warn("===> ES-Import bulk request failed, retry later. attempt={}/{}, size={}, error={}",
                         attempt, maxAttempt, rows.size(), e.getMessage());
+                // 简单固定间隔重试，避免ES短暂抖动直接导致整次导入失败。
                 sleepQuietly(properties.getRetryInterval());
             }
         }
@@ -165,7 +174,7 @@ public class EsBulkImporter {
     /**
      * 构建并发送Bulk请求。
      *
-     * <p>单条数据无法生成文档ID时只记录失败并跳过，不影响同批次其他数据写入。</p>
+     * <p>单条数据缺少文档ID时只记录失败并跳过，不影响同批次其他数据写入。</p>
      */
     private BulkResponse sendBulk(ImportContext context, List<Map<String, Object>> rows) throws IOException {
         EsImportConfig config = requireConfig(context);
@@ -177,9 +186,9 @@ public class EsBulkImporter {
         int validCount = 0;
 
         for (Map<String, Object> row : rows) {
+            // 文档ID必须稳定，保证重跑同一批数据时ES写入幂等。
             String documentId = extractDocumentId(row, idColumn);
             if (StringUtils.isBlank(documentId)) {
-                // 理论兜底分支：当前extractDocumentId会生成临时ID，保留该判断防御后续改动。
                 context.getStatistics().getFailed().incrementAndGet();
                 log.warn("===> ES-Import skip row because document id is blank. idColumn={}, row={}", idColumn, row);
                 continue;
@@ -193,6 +202,7 @@ public class EsBulkImporter {
         }
 
         if (validCount == 0) {
+            // 整个子批次都无有效文档时跳过请求，避免发送空Bulk。
             log.warn("===> ES-Import skip bulk because no valid documents. rows={}", rows.size());
             return null;
         }
@@ -207,6 +217,7 @@ public class EsBulkImporter {
      */
     private void handleResponse(ImportContext context, BulkResponse response) {
         if (response == null) {
+            // 空响应表示本批没有可发送文档，统计已在构建阶段处理。
             return;
         }
 
@@ -220,6 +231,7 @@ public class EsBulkImporter {
         context.getStatistics().getBulkCount().incrementAndGet();
 
         if (response.errors()) {
+            // 只打印有限条错误明细，完整失败数量进入统计对象。
             logBulkErrors(response);
         }
 
@@ -230,6 +242,9 @@ public class EsBulkImporter {
                 context.getStatistics().getFailed().get());
     }
 
+    /**
+     * 打印Bulk item级失败明细。
+     */
     private void logBulkErrors(BulkResponse response) {
         int count = 0;
         for (BulkResponseItem item : response.items()) {
@@ -240,11 +255,15 @@ public class EsBulkImporter {
                     item.id(), item.status(), item.error().reason());
             count++;
             if (count >= MAX_ERROR_LOG_COUNT) {
+                // 失败过多时截断日志，防止单次导入刷爆日志文件。
                 break;
             }
         }
     }
 
+    /**
+     * 从共享队列中获取一批待读取数据。
+     */
     private List<Map<String, Object>> takeBatch(ImportContext context) {
         try {
             return context.getQueue().take();
@@ -254,10 +273,14 @@ public class EsBulkImporter {
         }
     }
 
+    /**
+     * 估算单条文档序列化后的字节数。
+     */
     private int estimateDocBytes(Map<String, Object> row) {
         try {
             return objectMapper.writeValueAsBytes(row).length;
         } catch (Exception e) {
+            // 估算失败不影响导入，使用保守默认值继续切分。
             return DEFAULT_DOC_BYTES;
         }
     }
@@ -265,8 +288,7 @@ public class EsBulkImporter {
     /**
      * 获取ES文档ID。
      *
-     * <p>优先使用业务主键。若主键缺失，生成临时ID兜底，避免单条脏数据中断整个批次。
-     * 注意：临时ID无法保证重跑幂等，因此会记录warn日志，后续应排查源表数据。</p>
+     * <p>优先使用业务主键。若主键缺失则跳过该条数据，避免随机ID造成重跑重复文档。</p>
      */
     private String extractDocumentId(Map<String, Object> row, String idColumn) {
         Object value = row.get(idColumn);
@@ -274,15 +296,17 @@ public class EsBulkImporter {
             return value.toString();
         }
 
-        String generatedId = GENERATED_ID_PREFIX + System.currentTimeMillis() + "_" + UUID.randomUUID();
-        log.warn("===> ES-Import document id missing, generated fallback id. idColumn={}, generatedId={}, row={}",
-                idColumn, generatedId, row);
-        return generatedId;
+        // 缺少稳定业务ID时不能随机生成，否则重跑会产生重复文档。
+        return null;
     }
 
+    /**
+     * 等待所有Bulk工作线程结束。
+     */
     private void waitWorkersDone(ExecutorService executor, List<Future<?>> futures) {
         try {
             for (Future<?> future : futures) {
+                // future.get会向上抛出工作线程异常，保证主流程感知失败。
                 future.get();
             }
             if (!executor.awaitTermination(1, TimeUnit.MINUTES)) {
@@ -294,6 +318,9 @@ public class EsBulkImporter {
         }
     }
 
+    /**
+     * 重试间隔等待。
+     */
     private void sleepQuietly(long millis) {
         try {
             Thread.sleep(Math.max(0, millis));
@@ -303,6 +330,9 @@ public class EsBulkImporter {
         }
     }
 
+    /**
+     * 校验导入上下文并返回业务配置。
+     */
     private EsImportConfig requireConfig(ImportContext context) {
         if (context == null || context.getConfig() == null) {
             throw new BusinessException("ES import context config cannot be null");
@@ -310,6 +340,9 @@ public class EsBulkImporter {
         return context.getConfig();
     }
 
+    /**
+     * 校验并返回导入全局参数。
+     */
     private EsImportProperties requireProperties(ImportContext context) {
         if (context == null || context.getProperties() == null) {
             throw new BusinessException("ES import properties cannot be null");
@@ -317,6 +350,9 @@ public class EsBulkImporter {
         return context.getProperties();
     }
 
+    /**
+     * 校验必填字符串参数。
+     */
     private String requireText(String value, String fieldName) {
         if (StringUtils.isBlank(value)) {
             throw new BusinessException("ES import " + fieldName + " cannot be blank");
@@ -324,10 +360,19 @@ public class EsBulkImporter {
         return value.trim();
     }
 
+    /**
+     * Bulk工作线程工厂，用于设置可识别的线程名。
+     */
     private static class BulkThreadFactory implements ThreadFactory {
 
+        /**
+         * 线程序号，便于日志中定位具体工作线程。
+         */
         private final AtomicInteger index = new AtomicInteger(1);
 
+        /**
+         * 创建Bulk工作线程。
+         */
         @Override
         public Thread newThread(Runnable runnable) {
             Thread thread = new Thread(runnable);

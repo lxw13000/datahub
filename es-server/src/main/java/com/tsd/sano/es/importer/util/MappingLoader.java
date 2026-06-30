@@ -60,10 +60,12 @@ public class MappingLoader {
      */
     public InputStream load(String mappingFile) {
         try {
+            // computeIfAbsent保证同一个mapping文件只读取一次。
             byte[] bytes = cache.computeIfAbsent(
                     mappingFile,
                     this::readBytes
             );
+            // 每次返回新的输入流，避免调用方关闭流后影响缓存内容。
             return new java.io.ByteArrayInputStream(bytes);
         } catch (Exception e) {
             throw new IllegalArgumentException("ES Mapping不存在：" + mappingFile, e);
@@ -77,6 +79,7 @@ public class MappingLoader {
     public boolean exists(String mappingFile) {
 
         try {
+            // 只检查classpath资源是否存在，不触发缓存加载。
             ClassPathResource resource = new ClassPathResource("esmapping/" + mappingFile);
             return resource.exists();
         } catch (Exception e) {
@@ -114,9 +117,11 @@ public class MappingLoader {
             log.info("===> ES-Import 加载Mapping：{}", mappingFile);
             ClassPathResource resource = new ClassPathResource("esmapping/" + mappingFile);
             if (!resource.exists()) {
+                // mapping缺失属于配置错误，直接中断索引创建流程。
                 throw new BusinessException("Mapping不存在：" + mappingFile);
             }
             try (InputStream input = resource.getInputStream()) {
+                // 缓存字节数组，避免后续重复IO。
                 return input.readAllBytes();
             }
         } catch (IOException e) {
