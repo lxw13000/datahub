@@ -36,7 +36,7 @@ echo [INFO] Image: %FULL_IMAGE%
 echo.
 
 echo [INFO] Build Spring Boot jar by local Maven...
-call mvn -q -DskipTests package
+call mvn -q -DskipTests clean package
 if errorlevel 1 (
   echo.
   echo [ERROR] Maven package failed.

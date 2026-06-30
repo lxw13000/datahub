@@ -32,7 +32,7 @@ echo "[INFO] Image: ${FULL_IMAGE}"
 echo
 
 echo "[INFO] Build Spring Boot jar by local Maven..."
-mvn -q -DskipTests package
+mvn -q -DskipTests clean package
 
 if [ "$PUSH_FLAG" = "--push" ]; then
   echo "[INFO] Build multi-arch image and push to Docker Hub..."
