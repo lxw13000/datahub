@@ -4,25 +4,45 @@ spring:
 
 sano:
   es:
+    uris: ${ES_URIS:127.0.0.1:9201}
+    username: ${ES_USERNAME:elastic}
+    password: ${ES_PASSWORD:es2peter}
+    socket-timeout: 600000
+    connection-timeout: 500000
+    connection-request-timeout: 5000
+    max-conn-total: 100
+    max-conn-per-route: 20
+
     import:
       # 默认关闭；确认ES和数据库配置无误后再打开
       task-enabled: false
       # 每天02:30导入昨天的数据
       cron: "0 30 2 * * ?"
-
-      page-size: 3000
+      # 每批读取数据库数量
+      read-batch-size: 3000
+      # Bulk线程数
       worker-count: 4
+      # BlockingQueue 队列缓存容量
       queue-capacity: 30
-      bulk-actions: 2000
-      bulk-size-mb: 10
+      # 每次Bulk文档数
+      bulk-actions: 3000
+      # 或每次bulk累计8MB立即发送，单位MB
+      bulk-size-mb: 8
+      # 最大重试次数
       retry-times: 3
+      # Retry等待(ms)
       retry-interval: 1000
+      # 是否开启导入监控
       enable-monitor: true
 
       # 单机Docker ES建议保持0副本
+      # 导入期间是否关闭Refresh
       disable-refresh: true
+      # 导入期间是否关闭副本
       disable-replica: true
+      # 导入完成是否删除历史索引
       delete-history-index: false
+      # 保留历史索引天数
       reserve-days: 30
 
       tables:
