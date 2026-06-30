@@ -57,8 +57,8 @@ sano:
       read-batch-size: 5000
       # Bulk线程数
       worker-count: 4
-      # BlockingQueue 队列缓存容量
-      queue-capacity: 40
+      # BlockingQueue 队列缓存容量；每个元素是一批read-batch-size数据，生产环境不宜过大。
+      queue-capacity: 16
       # 每次Bulk文档数
       bulk-actions: 3000
       # 或每次bulk累计8MB立即发送，单位MB

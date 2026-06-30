@@ -15,8 +15,8 @@ services:
         max-file: "5"
     privileged: true
     cpus: "4.0"
-    mem_limit: 6g
-    mem_reservation: 4g
+    mem_limit: 8g
+    mem_reservation: 6g
     ulimits:
       memlock:
         soft: -1
@@ -36,7 +36,7 @@ services:
       LANG: en_US.UTF-8
       discovery.type: single-node
       bootstrap.memory_lock: "true"
-      ES_JAVA_OPTS: "-Xms3g -Xmx3g -XX:+UseG1GC -XX:MaxGCPauseMillis=200"
+      ES_JAVA_OPTS: "-Xms4g -Xmx4g -XX:+UseG1GC -XX:MaxGCPauseMillis=200"
       ELASTIC_PASSWORD: "es2peter" # elastic账号密码
     ports:
       - "9201:9200"

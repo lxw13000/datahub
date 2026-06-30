@@ -16,8 +16,8 @@ services:
       options:
         max-size: "100m"
         max-file: "5"
-    cpus: "1.5"
-    mem_limit: 1536m
+    cpus: "2.0"
+    mem_limit: 2g
     mem_reservation: 1g
     environment:
       TZ: Asia/Shanghai
@@ -26,7 +26,7 @@ services:
       LOG_DIR: /app/logs/es-server
 
       # Java运行参数。正式服务器还有其他服务时，限制导入服务资源占用。
-      JAVA_OPTS: "-Xms768m -Xmx1g -XX:+UseG1GC -XX:MaxGCPauseMillis=200 -XX:+HeapDumpOnOutOfMemoryError -XX:HeapDumpPath=/app/logs/es-server"
+      JAVA_OPTS: "-Xms1g -Xmx1536m -XX:+UseG1GC -XX:MaxGCPauseMillis=200 -XX:+HeapDumpOnOutOfMemoryError -XX:HeapDumpPath=/app/logs/es-server"
 
       # MySQL配置。生产部署建议通过环境变量覆盖默认值。
       MYSQL_UNM: ${MYSQL_UNM:-admin}
