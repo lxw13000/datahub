@@ -98,6 +98,16 @@ public class EsImportProperties {
     private String cron = "0 30 2 * * ?";
 
     /**
+     * 每轮定时调度最大运行小时数，超过后不再启动下一条任务
+     */
+    private int maxRunHours = 8;
+
+    /**
+     * 每轮调度最多拉取的待执行任务数量
+     */
+    private int taskFetchLimit = 100;
+
+    /**
      * 定时任务需要导入的表配置
      */
     private List<TableConfig> tables = new ArrayList<>();
@@ -230,6 +240,22 @@ public class EsImportProperties {
 
     public void setCron(String cron) {
         this.cron = cron;
+    }
+
+    public int getMaxRunHours() {
+        return maxRunHours;
+    }
+
+    public void setMaxRunHours(int maxRunHours) {
+        this.maxRunHours = maxRunHours;
+    }
+
+    public int getTaskFetchLimit() {
+        return taskFetchLimit;
+    }
+
+    public void setTaskFetchLimit(int taskFetchLimit) {
+        this.taskFetchLimit = taskFetchLimit;
     }
 
     public List<TableConfig> getTables() {

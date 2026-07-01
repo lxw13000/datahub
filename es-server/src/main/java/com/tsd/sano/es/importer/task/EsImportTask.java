@@ -2,7 +2,11 @@ package com.tsd.sano.es.importer.task;
 
 import com.tsd.sano.es.core.config.EsImportProperties;
 import com.tsd.sano.es.importer.model.EsImportConfig;
+import com.tsd.sano.es.importer.model.ImportStatistics;
 import com.tsd.sano.es.importer.service.EsImportService;
+import com.tsd.sano.es.search.SanoImportTaskService;
+import com.tsd.sano.es.search.model.SanoImportTask;
+import com.tsd.sano.es.search.model.SanoImportTaskStatus;
 import org.apache.commons.lang3.StringUtils;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -11,11 +15,14 @@ import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Component;
 
 import java.time.LocalDate;
+import java.time.LocalDateTime;
+import java.time.format.DateTimeFormatter;
+import java.util.List;
 
 /**
  * ES定时导入任务。
  *
- * <p>默认关闭，需配置 sano.es.import.task-enabled=true 后才会注册执行。</p>
+ * <p>每天先生成PENDING任务，再按任务索引顺序串行执行待处理任务。</p>
  */
 @Component
 @ConditionalOnProperty(prefix = "sano.es.import", name = "task-enabled", havingValue = "true")
@@ -23,53 +30,162 @@ public class EsImportTask {
 
     private static final Logger log = LoggerFactory.getLogger(EsImportTask.class);
 
+    /**
+     * 导入日期格式，和任务索引中的import_date字段保持一致。
+     */
+    private static final DateTimeFormatter IMPORT_DATE_FORMATTER = DateTimeFormatter.BASIC_ISO_DATE;
+
     private final EsImportProperties properties;
     private final EsImportService importService;
+    private final SanoImportTaskService importTaskService;
 
     /**
-     * 注入导入配置和导入服务。
+     * 注入导入配置、导入服务和任务索引服务。
      */
-    public EsImportTask(EsImportProperties properties, EsImportService importService) {
+    public EsImportTask(EsImportProperties properties,
+                        EsImportService importService,
+                        SanoImportTaskService importTaskService) {
         this.properties = properties;
         this.importService = importService;
+        this.importTaskService = importTaskService;
     }
 
     /**
-     * 每天按配置导入T+1数据。
+     * 每天按配置生成T+1导入任务，并串行执行所有待处理任务。
      */
     @Scheduled(cron = "${sano.es.import.cron:0 30 2 * * ?}")
     public void importYesterday() {
         LocalDate importDate = LocalDate.now().minusDays(1);
-        log.info("===> ES-Import scheduled task start. date={}", importDate);
+        long deadlineMillis = System.currentTimeMillis() + maxRunMillis();
+        log.info("===> ES-Import scheduled task start. date={}, maxRunHours={}",
+                importDate, properties.getMaxRunHours());
 
-        // 多表串行导入，单表异常在importOneTable中隔离处理。
-        properties.getTables().stream()
-                .filter(EsImportProperties.TableConfig::isEnabled)
-                .forEach(table -> importOneTable(table, importDate));
+        createPendingTasks(importDate);
+        runPendingTasks(deadlineMillis);
 
         log.info("===> ES-Import scheduled task finished. date={}", importDate);
     }
 
     /**
-     * 导入单张配置表。
+     * 为当天配置的所有启用表创建PENDING任务。
      */
-    private void importOneTable(EsImportProperties.TableConfig table, LocalDate importDate) {
-        try {
-            EsImportConfig config = new EsImportConfig();
-            config.setIndexAlias(table.getIndexAlias());
-            // 表名未配置时默认复用业务alias。
-            config.setTableName(StringUtils.defaultIfBlank(table.getTableName(), table.getIndexAlias()));
-            config.setMappingFile(table.getMappingFile());
-            config.setWhereSql(table.getWhereSql());
-            config.setIdColumn(table.getIdColumn());
-            config.setDtColumn(table.getDtColumn());
-            config.setImportDate(importDate);
+    private void createPendingTasks(LocalDate importDate) {
+        for (EsImportProperties.TableConfig table : properties.getTables()) {
+            if (!table.isEnabled()) {
+                continue;
+            }
 
-            importService.importData(config);
-        } catch (Exception e) {
-            // 单表失败不影响后续表导入，错误通过日志汇总。
-            log.error("===> ES-Import scheduled table failed. alias={}, table={}, date={}, error={}",
-                    table.getIndexAlias(), table.getTableName(), importDate, e.getMessage(), e);
+            try {
+                SanoImportTask task = buildTask(table, importDate);
+                importTaskService.addTask(task);
+            } catch (Exception e) {
+                // 单表任务创建失败不影响其他表落任务，便于后续人工排查和补偿。
+                log.error("===> ES-Import create pending task failed. alias={}, table={}, date={}, error={}",
+                        table.getIndexAlias(), table.getTableName(), importDate, e.getMessage(), e);
+            }
         }
+    }
+
+    /**
+     * 执行本轮拉取到的待处理任务。
+     */
+    private void runPendingTasks(long deadlineMillis) {
+        List<SanoImportTask> tasks = importTaskService.listPendingTasks(properties.getTaskFetchLimit());
+        if (tasks.isEmpty()) {
+            log.info("===> ES-Import no pending task.");
+            return;
+        }
+
+        for (SanoImportTask task : tasks) {
+            if (System.currentTimeMillis() >= deadlineMillis) {
+                // 本轮调度到达运行上限后不再启动新任务，已经完成落库的PENDING任务留待下一轮继续。
+                log.warn("===> ES-Import scheduled task reach max run time, stop starting new task. maxRunHours={}",
+                        properties.getMaxRunHours());
+                return;
+            }
+
+            executeTask(task);
+        }
+    }
+
+    /**
+     * 执行单条任务，并维护任务状态。
+     */
+    private void executeTask(SanoImportTask task) {
+        try {
+            task.setStatus(SanoImportTaskStatus.RUNNING.name());
+            task.setRunCount(task.getRunCount() + 1);
+            task.setStartedAt(LocalDateTime.now());
+            task.setFinishedAt(null);
+            task.setLastError(null);
+            importTaskService.updateTask(task);
+
+            ImportStatistics statistics = importService.importData(toImportConfig(task));
+
+            task.setStatus(SanoImportTaskStatus.SUCCESS.name());
+            task.setTotalCount(statistics.getTotal().get());
+            task.setSuccessCount(statistics.getSuccess().get());
+            task.setFailedCount(statistics.getFailed().get());
+            task.setLastSuccessId(statistics.getLastId());
+            task.setFinishedAt(LocalDateTime.now());
+            importTaskService.updateTask(task);
+        } catch (Exception e) {
+            task.setStatus(SanoImportTaskStatus.FAILED.name());
+            task.setLastError(StringUtils.left(e.getMessage(), 1000));
+            task.setFinishedAt(LocalDateTime.now());
+            importTaskService.updateTask(task);
+
+            // 当前任务失败后继续执行后续任务，避免单表异常阻塞整个调度批次。
+            log.error("===> ES-Import pending task failed. taskId={}, alias={}, table={}, date={}, error={}",
+                    task.getTaskId(), task.getIndexAlias(), task.getTableName(), task.getImportDate(), e.getMessage(), e);
+        }
+    }
+
+    /**
+     * 根据表配置构建任务索引文档。
+     */
+    private SanoImportTask buildTask(EsImportProperties.TableConfig table, LocalDate importDate) {
+        String indexAlias = table.getIndexAlias();
+        String tableName = StringUtils.defaultIfBlank(table.getTableName(), indexAlias);
+        String importDateText = IMPORT_DATE_FORMATTER.format(importDate);
+
+        SanoImportTask task = new SanoImportTask();
+        task.setTableName(tableName);
+        task.setIndexAlias(indexAlias);
+        task.setIndexName(indexAlias + "_" + importDateText);
+        task.setImportDate(importDateText);
+        task.setStatus(SanoImportTaskStatus.PENDING.name());
+        task.setLastSuccessId(0L);
+        return task;
+    }
+
+    /**
+     * 将任务文档转换为导入流程配置。
+     */
+    private EsImportConfig toImportConfig(SanoImportTask task) {
+        EsImportConfig config = new EsImportConfig();
+        config.setIndexAlias(task.getIndexAlias());
+        config.setIndexName(task.getIndexName());
+        config.setTableName(task.getTableName());
+        config.setImportDate(LocalDate.parse(task.getImportDate(), IMPORT_DATE_FORMATTER));
+
+        // 根据业务alias反查表配置，复用mapping、whereSql和主键字段等配置。
+        properties.getTables().stream()
+                .filter(table -> StringUtils.equals(table.getIndexAlias(), task.getIndexAlias()))
+                .findFirst()
+                .ifPresent(table -> {
+                    config.setMappingFile(table.getMappingFile());
+                    config.setWhereSql(table.getWhereSql());
+                    config.setIdColumn(table.getIdColumn());
+                    config.setDtColumn(table.getDtColumn());
+                });
+        return config;
+    }
+
+    /**
+     * 计算本轮调度最大运行毫秒数。
+     */
+    private long maxRunMillis() {
+        return Math.max(1, properties.getMaxRunHours()) * 60L * 60L * 1000L;
     }
 }

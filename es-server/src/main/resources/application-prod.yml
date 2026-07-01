@@ -53,6 +53,10 @@ sano:
       task-enabled: false
       # 每天03:00导入昨天的数据
       cron: "0 0 3 * * ?"
+      # 每轮定时调度最多运行8小时，超时后不再启动下一条待执行任务
+      max-run-hours: 8
+      # 每轮调度最多拉取100条待执行任务，覆盖多表和少量历史积压场景
+      task-fetch-limit: 100
       # 每批读取数据库数量
       read-batch-size: 10000
       # Bulk线程数

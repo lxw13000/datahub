@@ -4,6 +4,7 @@ import co.elastic.clients.elasticsearch.ElasticsearchClient;
 import co.elastic.clients.elasticsearch._types.ElasticsearchException;
 import co.elastic.clients.elasticsearch._types.FieldValue;
 import co.elastic.clients.elasticsearch._types.OpType;
+import co.elastic.clients.elasticsearch._types.Refresh;
 import co.elastic.clients.elasticsearch._types.SortOrder;
 import co.elastic.clients.elasticsearch.core.GetResponse;
 import co.elastic.clients.elasticsearch.core.IndexResponse;
@@ -136,6 +137,7 @@ public class SanoImportTaskService {
                     .index(TASK_INDEX)
                     .id(task.getTaskId())
                     .opType(OpType.Create)
+                    .refresh(Refresh.WaitFor)
                     .document(task));
 
             log.info("===> ES-Import task created. taskId={}, result={}", task.getTaskId(), response.result());
@@ -173,6 +175,7 @@ public class SanoImportTaskService {
             UpdateResponse<SanoImportTask> response = client.update(request -> request
                     .index(TASK_INDEX)
                     .id(task.getTaskId())
+                    .refresh(Refresh.WaitFor)
                     .doc(task), SanoImportTask.class);
 
             log.info("===> ES-Import task updated. taskId={}, result={}", task.getTaskId(), response.result());
