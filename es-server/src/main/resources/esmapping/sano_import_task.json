@@ -1,0 +1,62 @@
+{
+  "settings": {
+    "number_of_shards": 1,
+    "number_of_replicas": 0,
+    "refresh_interval": "1s"
+  },
+  "mappings": {
+    "dynamic": "strict",
+    "properties": {
+      "table_name": {
+        "type": "keyword"
+      },
+      "index_alias": {
+        "type": "keyword"
+      },
+      "index_name": {
+        "type": "keyword"
+      },
+      "import_date": {
+        "type": "keyword"
+      },
+      "status": {
+        "type": "keyword"
+      },
+      "last_success_id": {
+        "type": "long"
+      },
+      "total_count": {
+        "type": "long"
+      },
+      "success_count": {
+        "type": "long"
+      },
+      "failed_count": {
+        "type": "long"
+      },
+      "run_count": {
+        "type": "integer"
+      },
+      "last_error": {
+        "type": "keyword",
+        "ignore_above": 1000
+      },
+      "started_at": {
+        "type": "date",
+        "format": "strict_date_optional_time||epoch_millis"
+      },
+      "finished_at": {
+        "type": "date",
+        "format": "strict_date_optional_time||epoch_millis"
+      },
+      "created_at": {
+        "type": "date",
+        "format": "strict_date_optional_time||epoch_millis"
+      },
+      "updated_at": {
+        "type": "date",
+        "format": "strict_date_optional_time||epoch_millis"
+      }
+    }
+  }
+}
