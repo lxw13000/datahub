@@ -73,7 +73,17 @@ public class JdbcDataReader {
 
         // 表名已做白名单校验，查询条件参数仍通过JDBC占位符传入。
         String sql = "SELECT COUNT(1) FROM " + tableName + " WHERE " + condition.whereSql();
-        Long total = jdbcTemplate.queryForObject(sql, Long.class, condition.params().toArray());
+        log.info("===> ES-Import count sql summary. table={}, sql={}, params={}",
+                tableName, sql, condition.params());
+
+        Long total;
+        try {
+            total = jdbcTemplate.queryForObject(sql, Long.class, condition.params().toArray());
+        } catch (Exception e) {
+            log.error("===> ES-Import count sql failed. table={}, sql={}, params={}, error={}",
+                    tableName, sql, condition.params(), e.getMessage(), e);
+            throw e;
+        }
         long totalCount = total == null ? 0L : total;
 
         context.getStatistics().getTotal().set(totalCount);
@@ -138,7 +148,13 @@ public class JdbcDataReader {
                 + " ORDER BY " + idColumn + " ASC"
                 + " LIMIT ?";
 
-        return jdbcTemplate.queryForList(sql, params.toArray());
+        try {
+            return jdbcTemplate.queryForList(sql, params.toArray());
+        } catch (Exception e) {
+            log.error("===> ES-Import read sql failed. table={}, sql={}, params={}, lastId={}, pageSize={}, error={}",
+                    tableName, sql, params, lastId, pageSize, e.getMessage(), e);
+            throw e;
+        }
     }
 
     /**
