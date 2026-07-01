@@ -15,10 +15,8 @@ import java.time.format.DateTimeFormatter;
 import java.time.format.DateTimeParseException;
 import java.util.List;
 import java.util.Map;
-import java.util.concurrent.ExecutorService;
-import java.util.concurrent.Executors;
-import java.util.concurrent.Future;
-import java.util.concurrent.TimeUnit;
+import java.util.Set;
+import java.util.concurrent.*;
 
 /**
  * ES导入总入口。
@@ -40,6 +38,13 @@ public class EsImportService {
      * 发送结束标记的队列等待时间，避免异常场景下永久阻塞。
      */
     private static final long END_SIGNAL_TIMEOUT_SECONDS = 1L;
+
+    /**
+     * 运行中的导入任务Key集合。
+     *
+     * <p>用于防止同一alias/date重复触发，避免并发创建同一个真实索引。</p>
+     */
+    private static final Set<String> RUNNING_IMPORT_KEYS = ConcurrentHashMap.newKeySet();
 
     private final EsImportProperties properties;
     private final EsIndexManager indexManager;
@@ -86,86 +91,101 @@ public class EsImportService {
         // 先补全默认配置，确保后续组件拿到完整的表名、索引名和日期。
         normalizeConfig(config);
 
-        ImportStatistics statistics = new ImportStatistics();
-        statistics.setStartTime(System.currentTimeMillis());
+        // 以真实索引名作为运行锁，防止同一alias/date被重复触发。
+        String importKey = buildImportKey(config);
+        if (!RUNNING_IMPORT_KEYS.add(importKey)) {
+            // add返回false表示已有相同导入正在执行，直接拒绝本次重复请求。
+            throw new BusinessException("ES import task is already running, alias=" + config.getIndexAlias()
+                    + ", index=" + config.getIndexName()
+                    + ", table=" + config.getTableName()
+                    + ", date=" + config.getImportDate());
+        }
 
-        // ImportContext贯穿Reader、Bulk、Index三个阶段，共享统计和中止信号。
-        ImportContext context = new ImportContext(config, statistics, properties);
+        try {
+            ImportStatistics statistics = new ImportStatistics();
+            statistics.setStartTime(System.currentTimeMillis());
 
-        // Java 21中ExecutorService支持try-with-resources，确保线程池生命周期跟随本次导入结束。
-        try (ExecutorService bulkExecutor = Executors.newSingleThreadExecutor(runnable -> {
-            Thread thread = new Thread(runnable);
-            thread.setName("es-import-bulk-dispatcher");
-            return thread;
-        })) {
+            // ImportContext贯穿Reader、Bulk、Index三个阶段，共享统计和中止信号。
+            ImportContext context = new ImportContext(config, statistics, properties);
 
-            boolean indexCreated = false;
-            boolean optimized = false;
+            // Java 21中ExecutorService支持try-with-resources，确保线程池生命周期跟随本次导入结束。
+            try (ExecutorService bulkExecutor = Executors.newSingleThreadExecutor(runnable -> {
+                Thread thread = new Thread(runnable);
+                thread.setName("es-import-bulk-dispatcher");
+                return thread;
+            })) {
 
-            try {
-                log.info("===> ES-Import start. alias={}, index={}, table={}, date={}",
-                        config.getIndexAlias(), config.getIndexName(), config.getTableName(), config.getImportDate());
+                boolean indexCreated = false;
+                boolean optimized = false;
 
-                monitorStart(context);
-
-                // 先统计总量，避免无数据时创建空索引并挂alias。
-                long total = jdbcDataReader.count(context);
-                if (total <= 0L) {
-                    throw new BusinessException("ES import no data, table=" + config.getTableName()
-                            + ", date=" + config.getImportDate());
-                }
-
-                // 创建真实索引，不提前绑定alias，避免半成品索引被查询。
-                indexCreated = indexManager.createIndex(context);
-                if (!indexCreated) {
-                    throw new BusinessException("ES import create index not acknowledged, index=" + config.getIndexName());
-                }
-
-                // 大批量写入前关闭refresh等参数，降低ES写入开销。
-                indexManager.beforeImport(context);
-                optimized = true;
-
-                // Bulk消费者先启动，再由Reader生产数据，形成读写流水线。
-                Future<?> bulkFuture = bulkExecutor.submit(() -> bulkImporter.importFromQueue(context));
                 try {
-                    jdbcDataReader.readToQueue(context);
+                    log.info("===> ES-Import start. alias={}, index={}, table={}, date={}",
+                            config.getIndexAlias(), config.getIndexName(), config.getTableName(), config.getImportDate());
+
+                    monitorStart(context);
+
+                    // 先统计总量，避免无数据时创建空索引并挂alias。
+                    long total = jdbcDataReader.count(context);
+                    if (total <= 0L) {
+                        throw new BusinessException("ES import no data, table=" + config.getTableName()
+                                + ", date=" + config.getImportDate());
+                    }
+
+                    // 创建真实索引，不提前绑定alias，避免半成品索引被查询。
+                    indexCreated = indexManager.createIndex(context);
+                    if (!indexCreated) {
+                        throw new BusinessException("ES import create index not acknowledged, index=" + config.getIndexName());
+                    }
+
+                    // 大批量写入前关闭refresh等参数，降低ES写入开销。
+                    indexManager.beforeImport(context);
+                    optimized = true;
+
+                    // Bulk消费者先启动，再由Reader生产数据，形成读写流水线。
+                    Future<?> bulkFuture = bulkExecutor.submit(() -> bulkImporter.importFromQueue(context));
+                    try {
+                        jdbcDataReader.readToQueue(context);
+                    } catch (Exception e) {
+                        // Reader失败时主动投递结束标记，让Bulk线程尽快退出。
+                        offerEndSignals(context);
+                        throw e;
+                    }
+                    // 等待Bulk线程全部消费完成，确保写入统计完整。
+                    waitBulkFinished(bulkFuture);
+
+                    checkImportResult(statistics);
+
+                    // 成功写入后恢复索引参数并刷新，随后再绑定业务alias。
+                    indexManager.afterImport(context);
+                    indexManager.switchAlias(context);
+                    indexManager.deleteHistoryIndices(context);
+
+                    log.info("===> ES-Import success. alias={}, index={}, total={}, success={}, costMs={}",
+                            config.getIndexAlias(),
+                            config.getIndexName(),
+                            statistics.getTotal().get(),
+                            statistics.getSuccess().get(),
+                            System.currentTimeMillis() - statistics.getStartTime());
+                    return statistics;
                 } catch (Exception e) {
-                    // Reader失败时主动投递结束标记，让Bulk线程尽快退出。
-                    offerEndSignals(context);
-                    throw e;
+                    // 异常时主动停止调度线程池，try-with-resources会再次兜底关闭。
+                    bulkExecutor.shutdownNow();
+                    monitorError(context, e);
+                    if (optimized) {
+                        // 导入失败也尽量恢复索引参数，避免refresh长期关闭。
+                        restoreIndexQuietly(context);
+                    }
+                    throw e instanceof BusinessException businessException
+                            ? businessException
+                            : new BusinessException("ES import failed, error=" + e.getMessage(), e);
+                } finally {
+                    statistics.setEndTime(System.currentTimeMillis());
+                    monitorFinish(context);
                 }
-                // 等待Bulk线程全部消费完成，确保写入统计完整。
-                waitBulkFinished(bulkFuture);
-
-                checkImportResult(statistics);
-
-                // 成功写入后恢复索引参数并刷新，随后再绑定业务alias。
-                indexManager.afterImport(context);
-                indexManager.switchAlias(context);
-                indexManager.deleteHistoryIndices(context);
-
-                log.info("===> ES-Import success. alias={}, index={}, total={}, success={}, costMs={}",
-                        config.getIndexAlias(),
-                        config.getIndexName(),
-                        statistics.getTotal().get(),
-                        statistics.getSuccess().get(),
-                        System.currentTimeMillis() - statistics.getStartTime());
-                return statistics;
-            } catch (Exception e) {
-                // 异常时主动停止调度线程池，try-with-resources会再次兜底关闭。
-                bulkExecutor.shutdownNow();
-                monitorError(context, e);
-                if (optimized) {
-                    // 导入失败也尽量恢复索引参数，避免refresh长期关闭。
-                    restoreIndexQuietly(context);
-                }
-                throw e instanceof BusinessException businessException
-                        ? businessException
-                        : new BusinessException("ES import failed, error=" + e.getMessage(), e);
-            } finally {
-                statistics.setEndTime(System.currentTimeMillis());
-                monitorFinish(context);
             }
+        } finally {
+            // 无论成功、失败还是异常中断，都释放运行中标记，避免后续任务被永久阻塞。
+            RUNNING_IMPORT_KEYS.remove(importKey);
         }
     }
 
@@ -205,6 +225,13 @@ public class EsImportService {
         } catch (DateTimeParseException e) {
             throw new BusinessException("ES import yyyyMMdd format invalid, value=" + yyyyMMdd, e);
         }
+    }
+
+    /**
+     * 构建导入运行锁Key。
+     */
+    private String buildImportKey(EsImportConfig config) {
+        return requireText(config.getIndexName(), "indexName");
     }
 
     /**
