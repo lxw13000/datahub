@@ -54,7 +54,7 @@ sano:
       # 每天03:00导入昨天的数据
       cron: "0 0 3 * * ?"
       # 每批读取数据库数量
-      read-batch-size: 5000
+      read-batch-size: 10000
       # Bulk线程数
       worker-count: 4
       # BlockingQueue 队列缓存容量；每个元素是一批read-batch-size数据，生产环境不宜过大。

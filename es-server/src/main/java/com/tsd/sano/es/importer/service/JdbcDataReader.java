@@ -125,6 +125,14 @@ public class JdbcDataReader {
                     lastId,
                     context.getStatistics().getRead().get(),
                     context.getStatistics().getTotal().get());
+
+            if (rows.size() < pageSize) {
+                // 当前页不足一整页，说明已读到最后一页，避免再次查询空页。
+                offerEndSignals(context);
+                log.info("===> ES-Import read finished. table={}, read={}",
+                        config.getTableName(), context.getStatistics().getRead().get());
+                return;
+            }
         }
     }
 
@@ -149,7 +157,13 @@ public class JdbcDataReader {
                 + " LIMIT ?";
 
         try {
-            return jdbcTemplate.queryForList(sql, params.toArray());
+            long startTime = System.currentTimeMillis();
+            List<Map<String, Object>> rows = jdbcTemplate.queryForList(sql, params.toArray());
+            long costMs = System.currentTimeMillis() - startTime;
+
+            log.info("===> ES-Import mysql page query. table={}, size={}, lastId={}, pageSize={}, costMs={}",
+                    tableName, rows.size(), lastId, pageSize, costMs);
+            return rows;
         } catch (Exception e) {
             log.error("===> ES-Import read sql failed. table={}, sql={}, params={}, lastId={}, pageSize={}, error={}",
                     tableName, sql, params, lastId, pageSize, e.getMessage(), e);
