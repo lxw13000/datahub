@@ -50,7 +50,7 @@ sano:
 
     import:
       # 默认关闭；确认ES和数据库配置无误后再打开
-      task-enabled: false
+      task-enabled: true
       # 每天03:00导入昨天的数据
       cron: "0 0 3 * * ?"
       # 每轮定时调度最多运行8小时，超时后不再启动下一条待执行任务
