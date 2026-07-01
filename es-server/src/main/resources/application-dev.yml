@@ -52,7 +52,7 @@ sano:
       # 默认关闭；确认ES和数据库配置无误后再打开
       task-enabled: false
       # 每天02:30导入昨天的数据
-      cron: "0 30 2 * * ?"
+      cron: "0 30 1 * * ?"
       # 每批读取数据库数量
       read-batch-size: 8000
       # Bulk线程数

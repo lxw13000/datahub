@@ -245,6 +245,33 @@ public class SanoImportTaskService {
     }
 
     /**
+     * 查询执行中的任务，用于调度前修复异常残留RUNNING状态。
+     *
+     * @param limit 查询数量
+     * @return 执行中的任务列表
+     */
+    public List<SanoImportTask> listRunningTasks(int limit) {
+        int size = Math.max(1, limit);
+        try {
+            SearchResponse<SanoImportTask> response = client.search(request -> request
+                            .index(TASK_INDEX)
+                            .size(size)
+                            .query(query -> query
+                                    .term(term -> term
+                                            .field("status")
+                                            .value(SanoImportTaskStatus.RUNNING.name())))
+                            .sort(sort -> sort.field(field -> field.field("updated_at").order(SortOrder.Asc))),
+                    SanoImportTask.class);
+
+            return response.hits().hits().stream()
+                    .map(this::toTask)
+                    .toList();
+        } catch (IOException | ElasticsearchException e) {
+            throw new ServiceException("ES import list running task failed, error=" + e.getMessage(), e);
+        }
+    }
+
+    /**
      * 将搜索命中转换为任务实体，并补全文档ID。
      */
     private SanoImportTask toTask(Hit<SanoImportTask> hit) {

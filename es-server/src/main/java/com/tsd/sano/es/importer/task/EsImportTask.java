@@ -14,6 +14,7 @@ import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Component;
 
+import jakarta.annotation.PostConstruct;
 import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.time.format.DateTimeFormatter;
@@ -51,6 +52,14 @@ public class EsImportTask {
     }
 
     /**
+     * 服务启动后修复上次异常退出留下的RUNNING任务。
+     */
+    @PostConstruct
+    public void repairRunningTasksOnStart() {
+        repairExpiredRunningTasks();
+    }
+
+    /**
      * 每天按配置生成T+1导入任务，并串行执行所有待处理任务。
      */
     @Scheduled(cron = "${sano.es.import.cron:0 30 2 * * ?}")
@@ -60,10 +69,33 @@ public class EsImportTask {
         log.info("===> ES-Import scheduled task start. date={}, maxRunHours={}",
                 importDate, properties.getMaxRunHours());
 
+        repairExpiredRunningTasks();
         createPendingTasks(importDate);
         runPendingTasks(deadlineMillis);
 
         log.info("===> ES-Import scheduled task finished. date={}", importDate);
+    }
+
+    /**
+     * 将超过运行窗口仍处于RUNNING的任务恢复为TIMEOUT_PARTIAL。
+     */
+    private void repairExpiredRunningTasks() {
+        LocalDateTime expireBefore = LocalDateTime.now().minusHours(Math.max(1, properties.getMaxRunHours()));
+        List<SanoImportTask> tasks = importTaskService.listRunningTasks(properties.getTaskFetchLimit());
+
+        for (SanoImportTask task : tasks) {
+            if (task.getUpdatedAt() == null || !task.getUpdatedAt().isBefore(expireBefore)) {
+                continue;
+            }
+
+            LocalDateTime expiredUpdatedAt = task.getUpdatedAt();
+            task.setStatus(SanoImportTaskStatus.TIMEOUT_PARTIAL.name());
+            task.setLastError("Recovered expired RUNNING task before scheduled import.");
+            task.setFinishedAt(LocalDateTime.now());
+            importTaskService.updateTask(task);
+            log.warn("===> ES-Import repair expired running task. taskId={}, alias={}, table={}, date={}, updatedAt={}",
+                    task.getTaskId(), task.getIndexAlias(), task.getTableName(), task.getImportDate(), expiredUpdatedAt);
+        }
     }
 
     /**
@@ -90,21 +122,23 @@ public class EsImportTask {
      * 执行本轮拉取到的待处理任务。
      */
     private void runPendingTasks(long deadlineMillis) {
-        List<SanoImportTask> tasks = importTaskService.listPendingTasks(properties.getTaskFetchLimit());
-        if (tasks.isEmpty()) {
-            log.info("===> ES-Import no pending task.");
-            return;
-        }
-
-        for (SanoImportTask task : tasks) {
-            if (System.currentTimeMillis() >= deadlineMillis) {
-                // 本轮调度到达运行上限后不再启动新任务，已经完成落库的PENDING任务留待下一轮继续。
-                log.warn("===> ES-Import scheduled task reach max run time, stop starting new task. maxRunHours={}",
-                        properties.getMaxRunHours());
+        while (true) {
+            List<SanoImportTask> tasks = importTaskService.listPendingTasks(properties.getTaskFetchLimit());
+            if (tasks.isEmpty()) {
+                log.info("===> ES-Import no pending task.");
                 return;
             }
 
-            executeTask(task, deadlineMillis);
+            for (SanoImportTask task : tasks) {
+                if (System.currentTimeMillis() >= deadlineMillis) {
+                    // 本轮调度到达运行上限后不再启动新任务，已经完成落库的PENDING任务留待下一轮继续。
+                    log.warn("===> ES-Import scheduled task reach max run time, stop starting new task. maxRunHours={}",
+                            properties.getMaxRunHours());
+                    return;
+                }
+
+                executeTask(task, deadlineMillis);
+            }
         }
     }
 
