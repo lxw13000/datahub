@@ -243,6 +243,7 @@ public class EsBulkImporter {
 
         context.getStatistics().getSuccess().addAndGet(success);
         context.getStatistics().getFailed().addAndGet(failed);
+        updateLastSuccessId(context, response);
         long bulkCount = context.getStatistics().getBulkCount().incrementAndGet();
 
         if (response.errors()) {
@@ -285,6 +286,23 @@ public class EsBulkImporter {
             if (count >= MAX_ERROR_LOG_COUNT) {
                 // 失败过多时截断日志，防止单次导入刷爆日志文件。
                 break;
+            }
+        }
+    }
+
+    /**
+     * 根据Bulk成功响应推进断点ID。
+     */
+    private void updateLastSuccessId(ImportContext context, BulkResponse response) {
+        for (BulkResponseItem item : response.items()) {
+            if (item.error() != null || StringUtils.isBlank(item.id())) {
+                continue;
+            }
+            try {
+                context.getStatistics().updateLastSuccessId(Long.parseLong(item.id()));
+            } catch (NumberFormatException e) {
+                // 当前导入依赖数值型主键分页，非数值ID不参与断点推进。
+                log.warn("===> ES-Import skip checkpoint update because document id is not numeric. id={}", item.id());
             }
         }
     }

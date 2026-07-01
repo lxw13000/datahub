@@ -88,6 +88,17 @@ public class EsImportService {
      * 按完整配置执行一次导入。
      */
     public ImportStatistics importData(EsImportConfig config) {
+        return importData(config, 0L, false);
+    }
+
+    /**
+     * 按完整配置执行一次导入，可用于限时任务和断点续跑。
+     *
+     * @param config         导入配置
+     * @param deadlineMillis 本次导入截止时间戳，0表示不启用deadline
+     * @param resumeIndex    true表示复用已有索引续跑，false表示创建新索引
+     */
+    public ImportStatistics importData(EsImportConfig config, long deadlineMillis, boolean resumeIndex) {
         // 先补全默认配置，确保后续组件拿到完整的表名、索引名和日期。
         normalizeConfig(config);
 
@@ -104,9 +115,11 @@ public class EsImportService {
         try {
             ImportStatistics statistics = new ImportStatistics();
             statistics.setStartTime(System.currentTimeMillis());
+            statistics.setLastId(Math.max(0L, config.getStartId()));
+            statistics.setLastSuccessId(Math.max(0L, config.getStartId()));
 
             // ImportContext贯穿Reader、Bulk、Index三个阶段，共享统计和中止信号。
-            ImportContext context = new ImportContext(config, statistics, properties);
+            ImportContext context = new ImportContext(config, statistics, properties, deadlineMillis);
 
             // Java 21中ExecutorService支持try-with-resources，确保线程池生命周期跟随本次导入结束。
             try (ExecutorService bulkExecutor = Executors.newSingleThreadExecutor(runnable -> {
@@ -119,8 +132,13 @@ public class EsImportService {
                 boolean optimized = false;
 
                 try {
-                    log.info("===> ES-Import start. alias={}, index={}, table={}, date={}",
-                            config.getIndexAlias(), config.getIndexName(), config.getTableName(), config.getImportDate());
+                    log.info("===> ES-Import start. alias={}, index={}, table={}, date={}, startId={}, resume={}",
+                            config.getIndexAlias(),
+                            config.getIndexName(),
+                            config.getTableName(),
+                            config.getImportDate(),
+                            config.getStartId(),
+                            resumeIndex);
 
                     monitorStart(context);
 
@@ -131,10 +149,20 @@ public class EsImportService {
                                 + ", date=" + config.getImportDate());
                     }
 
-                    // 创建真实索引，不提前绑定alias，避免半成品索引被查询。
-                    indexCreated = indexManager.createIndex(context);
-                    if (!indexCreated) {
-                        throw new ServiceException("ES import create index not acknowledged, index=" + config.getIndexName());
+                    if (resumeIndex) {
+                        // 续跑任务复用上一次未完成索引，不重新创建，避免覆盖已有导入进度。
+                        if (!indexManager.exists(config.getIndexName())) {
+                            throw new ServiceException("ES import resume index not exists, index=" + config.getIndexName());
+                        }
+                        indexCreated = true;
+                        log.info("===> ES-Import reuse partial index. index={}, startId={}",
+                                config.getIndexName(), config.getStartId());
+                    } else {
+                        // 创建真实索引，不提前绑定alias，避免半成品索引被查询。
+                        indexCreated = indexManager.createIndex(context);
+                        if (!indexCreated) {
+                            throw new ServiceException("ES import create index not acknowledged, index=" + config.getIndexName());
+                        }
                     }
 
                     // 大批量写入前关闭refresh等参数，降低ES写入开销。
@@ -152,6 +180,21 @@ public class EsImportService {
                     }
                     // 等待Bulk线程全部消费完成，确保写入统计完整。
                     waitBulkFinished(bulkFuture);
+
+                    if (statistics.isTimeoutPartial()) {
+                        // 超时暂停只恢复索引参数并刷新，不切换alias，避免线上读到半成品索引。
+                        indexManager.afterImport(context);
+                        log.warn("===> ES-Import timeout partial. alias={}, index={}, total={}, read={}, success={}, failed={}, lastId={}, costMs={}",
+                                config.getIndexAlias(),
+                                config.getIndexName(),
+                                statistics.getTotal().get(),
+                                statistics.getRead().get(),
+                                statistics.getSuccess().get(),
+                                statistics.getFailed().get(),
+                                statistics.getLastId(),
+                                System.currentTimeMillis() - statistics.getStartTime());
+                        return statistics;
+                    }
 
                     checkImportResult(statistics);
 

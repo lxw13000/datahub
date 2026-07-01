@@ -103,6 +103,14 @@ public class JdbcDataReader {
         while (true) {
             // 每轮读取前检查Bulk侧是否已失败，避免继续压入数据。
             checkAbort(context);
+            if (context.isDeadlineReached()) {
+                // 到达deadline后不再发起新的MySQL查询，已入队数据交给Bulk继续写完。
+                context.markTimeoutPartial();
+                offerEndSignals(context);
+                log.warn("===> ES-Import reader reach deadline, stop mysql query. table={}, read={}, lastId={}",
+                        config.getTableName(), context.getStatistics().getRead().get(), lastId);
+                return;
+            }
 
             List<Map<String, Object>> rows = fetchPage(context, lastId, pageSize);
             if (rows.isEmpty()) {

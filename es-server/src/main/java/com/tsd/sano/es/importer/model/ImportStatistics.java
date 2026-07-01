@@ -42,6 +42,11 @@ public class ImportStatistics {
     private volatile long lastId;
 
     /**
+     * 已确认成功写入ES的最大ID
+     */
+    private final AtomicLong lastSuccessId = new AtomicLong();
+
+    /**
      * 开始时间
      */
     private volatile long startTime;
@@ -50,6 +55,11 @@ public class ImportStatistics {
      * 结束时间
      */
     private volatile long endTime;
+
+    /**
+     * 是否因为到达deadline而暂停
+     */
+    private volatile boolean timeoutPartial;
 
     public AtomicLong getTotal() {
         return total;
@@ -79,6 +89,21 @@ public class ImportStatistics {
         this.lastId = lastId;
     }
 
+    public long getLastSuccessId() {
+        return lastSuccessId.get();
+    }
+
+    public void setLastSuccessId(long value) {
+        lastSuccessId.set(value);
+    }
+
+    /**
+     * 只向前推进成功写入断点，避免并发Bulk完成顺序不同导致回退。
+     */
+    public void updateLastSuccessId(long value) {
+        lastSuccessId.accumulateAndGet(value, Math::max);
+    }
+
     public long getStartTime() {
         return startTime;
     }
@@ -93,5 +118,13 @@ public class ImportStatistics {
 
     public void setEndTime(long endTime) {
         this.endTime = endTime;
+    }
+
+    public boolean isTimeoutPartial() {
+        return timeoutPartial;
+    }
+
+    public void setTimeoutPartial(boolean timeoutPartial) {
+        this.timeoutPartial = timeoutPartial;
     }
 }

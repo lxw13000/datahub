@@ -51,6 +51,11 @@ public class EsImportConfig {
      */
     private String dtColumn = "dt";
 
+    /**
+     * 起始游标ID，用于断点续跑时从 last_success_id 后继续读取
+     */
+    private long startId;
+
     public String getIndexAlias() {
         return indexAlias;
     }
@@ -113,5 +118,13 @@ public class EsImportConfig {
 
     public void setDtColumn(String dtColumn) {
         this.dtColumn = dtColumn;
+    }
+
+    public long getStartId() {
+        return startId;
+    }
+
+    public void setStartId(long startId) {
+        this.startId = startId;
     }
 }

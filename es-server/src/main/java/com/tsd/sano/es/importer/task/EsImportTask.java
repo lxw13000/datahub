@@ -104,14 +104,15 @@ public class EsImportTask {
                 return;
             }
 
-            executeTask(task);
+            executeTask(task, deadlineMillis);
         }
     }
 
     /**
      * 执行单条任务，并维护任务状态。
      */
-    private void executeTask(SanoImportTask task) {
+    private void executeTask(SanoImportTask task, long deadlineMillis) {
+        boolean resumeTask = StringUtils.equals(task.getStatus(), SanoImportTaskStatus.TIMEOUT_PARTIAL.name());
         try {
             task.setStatus(SanoImportTaskStatus.RUNNING.name());
             task.setRunCount(task.getRunCount() + 1);
@@ -120,13 +121,24 @@ public class EsImportTask {
             task.setLastError(null);
             importTaskService.updateTask(task);
 
-            ImportStatistics statistics = importService.importData(toImportConfig(task));
+            ImportStatistics statistics = importService.importData(toImportConfig(task, resumeTask), deadlineMillis, resumeTask);
+
+            if (statistics.isTimeoutPartial()) {
+                task.setStatus(SanoImportTaskStatus.TIMEOUT_PARTIAL.name());
+                task.setTotalCount(statistics.getTotal().get());
+                task.setSuccessCount(task.getSuccessCount() + statistics.getSuccess().get());
+                task.setFailedCount(task.getFailedCount() + statistics.getFailed().get());
+                task.setLastSuccessId(statistics.getLastSuccessId());
+                task.setFinishedAt(LocalDateTime.now());
+                importTaskService.updateTask(task);
+                return;
+            }
 
             task.setStatus(SanoImportTaskStatus.SUCCESS.name());
             task.setTotalCount(statistics.getTotal().get());
-            task.setSuccessCount(statistics.getSuccess().get());
-            task.setFailedCount(statistics.getFailed().get());
-            task.setLastSuccessId(statistics.getLastId());
+            task.setSuccessCount(task.getSuccessCount() + statistics.getSuccess().get());
+            task.setFailedCount(task.getFailedCount() + statistics.getFailed().get());
+            task.setLastSuccessId(statistics.getLastSuccessId());
             task.setFinishedAt(LocalDateTime.now());
             importTaskService.updateTask(task);
         } catch (Exception e) {
@@ -162,12 +174,16 @@ public class EsImportTask {
     /**
      * 将任务文档转换为导入流程配置。
      */
-    private EsImportConfig toImportConfig(SanoImportTask task) {
+    private EsImportConfig toImportConfig(SanoImportTask task, boolean resumeTask) {
         EsImportConfig config = new EsImportConfig();
         config.setIndexAlias(task.getIndexAlias());
         config.setIndexName(task.getIndexName());
         config.setTableName(task.getTableName());
         config.setImportDate(LocalDate.parse(task.getImportDate(), IMPORT_DATE_FORMATTER));
+        if (resumeTask) {
+            // 续跑任务从已确认写入ES的最大ID后继续读取。
+            config.setStartId(task.getLastSuccessId());
+        }
 
         // 根据业务alias反查表配置，复用mapping、whereSql和主键字段等配置。
         properties.getTables().stream()
