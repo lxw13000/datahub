@@ -5,7 +5,7 @@ import co.elastic.clients.json.jackson.JacksonJsonpMapper;
 import co.elastic.clients.transport.ElasticsearchTransport;
 import co.elastic.clients.transport.rest_client.RestClientTransport;
 import com.fasterxml.jackson.databind.ObjectMapper;
-import com.tsd.sano.es.core.exception.BusinessException;
+import com.tsd.sano.es.core.exception.ServiceException;
 import org.apache.commons.lang3.StringUtils;
 import org.apache.http.HttpHost;
 import org.apache.http.auth.AuthScope;
@@ -122,7 +122,7 @@ public class ElasticClientConfig {
 
     private HttpHost[] toHttpHost() {
         if (StringUtils.isBlank(hosts)) {
-            throw new BusinessException("elasticsearch hosts不能为空");
+            throw new ServiceException("elasticsearch hosts不能为空");
         }
 
         String[] hostArray = hosts.split(",");

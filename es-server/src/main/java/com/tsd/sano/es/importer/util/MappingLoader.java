@@ -1,6 +1,6 @@
 package com.tsd.sano.es.importer.util;
 
-import com.tsd.sano.es.core.exception.BusinessException;
+import com.tsd.sano.es.core.exception.ServiceException;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.core.io.ClassPathResource;
@@ -68,7 +68,7 @@ public class MappingLoader {
             // 每次返回新的输入流，避免调用方关闭流后影响缓存内容。
             return new java.io.ByteArrayInputStream(bytes);
         } catch (Exception e) {
-            throw new IllegalArgumentException("ES Mapping不存在：" + mappingFile, e);
+            throw new ServiceException("ES Mapping不存在：" + mappingFile, e);
         }
 
     }
@@ -118,14 +118,14 @@ public class MappingLoader {
             ClassPathResource resource = new ClassPathResource("esmapping/" + mappingFile);
             if (!resource.exists()) {
                 // mapping缺失属于配置错误，直接中断索引创建流程。
-                throw new BusinessException("Mapping不存在：" + mappingFile);
+                throw new ServiceException("Mapping不存在：" + mappingFile);
             }
             try (InputStream input = resource.getInputStream()) {
                 // 缓存字节数组，避免后续重复IO。
                 return input.readAllBytes();
             }
         } catch (IOException e) {
-            throw new RuntimeException("读取Mapping失败：" + mappingFile, e);
+            throw new ServiceException("读取Mapping失败：" + mappingFile, e);
         }
     }
 

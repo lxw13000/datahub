@@ -1,0 +1,164 @@
+package com.tsd.sano.es.core.exception;
+
+import com.tsd.sano.es.core.result.ResultVO;
+import jakarta.servlet.http.HttpServletResponse;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+import org.springframework.core.MethodParameter;
+import org.springframework.dao.DataAccessException;
+import org.springframework.http.MediaType;
+import org.springframework.http.converter.HttpMessageConverter;
+import org.springframework.http.server.ServerHttpRequest;
+import org.springframework.http.server.ServerHttpResponse;
+import org.springframework.web.HttpRequestMethodNotSupportedException;
+import org.springframework.web.bind.annotation.ExceptionHandler;
+import org.springframework.web.bind.annotation.RestControllerAdvice;
+import org.springframework.web.servlet.NoHandlerFoundException;
+import org.springframework.web.servlet.mvc.method.annotation.ResponseBodyAdvice;
+import org.springframework.web.servlet.resource.NoResourceFoundException;
+
+import java.sql.SQLException;
+
+import static com.tsd.sano.es.core.constant.ResultCode.SYS_ERROR;
+
+
+/**
+ * 全局异常处理
+ *
+ * @author tn
+ */
+@RestControllerAdvice
+public class ControllerExceptionHandler implements ResponseBodyAdvice<Object> {
+
+    private static final Logger log = LoggerFactory.getLogger(ControllerExceptionHandler.class);
+
+
+    /**
+     * spring data 处理
+     *
+     * @param ex       sql
+     * @param response HttpServletResponse
+     * @return ExceptionResultWrap
+     */
+    @ExceptionHandler({DataAccessException.class, SQLException.class})
+    public Object handleSQLException(DataAccessException ex, HttpServletResponse response) {
+        logInput(ex);
+        return ResultVO.of(SYS_ERROR.getCode(), "数据库操作失败，请稍后再试");
+    }
+
+    /**
+     * 处理自定义异常 - ServiceException
+     *
+     * @param e 异常
+     * @return 返回异常信息
+     */
+    @ExceptionHandler(ServiceException.class)
+    public Object handleBusinessException(ServiceException e, HttpServletResponse response) {
+        logInput(e);
+        return ResultVO.of(e.getCode(), e.getMessage());
+    }
+
+    /**
+     * 404 拦截必须在配置文件加这个
+     * <pre>
+     *    spring.mvc.throw-exception-if-no-handler-found=true #出现错误时, 直接抛出异常
+     *    spring.resources.add-mappings=false   #不要为我们工程中的资源文件建立映射
+     * </pre>
+     *
+     * @param e 错误
+     * @return 返回错误
+     */
+    @ExceptionHandler(NoHandlerFoundException.class)
+    public Object exceptionHandler(NoHandlerFoundException e, HttpServletResponse response) {
+        logInput(e);
+        return ResultVO.of(403, "路径不存在，请检查路径是否正确");
+    }
+
+    /**
+     * 空指针处理
+     */
+    @ExceptionHandler(NullPointerException.class)
+    public Object handleNullPointerException(NullPointerException e, HttpServletResponse response) {
+        logInput(e);
+        // 空指针异常
+        return ResultVO.of(SYS_ERROR.getCode(), "暂时无法获取数据");
+    }
+
+    /**
+     * 请求方式处理
+     */
+    @ExceptionHandler(HttpRequestMethodNotSupportedException.class)
+    public Object handleHttpRequestMethodNotSupportedException(HttpRequestMethodNotSupportedException e, HttpServletResponse response) {
+        logInput(e);
+        return ResultVO.of(SYS_ERROR.getCode(), "请求方式不对 - 请检查接口 method 是 get/post/put/delete ");
+    }
+
+
+    @ExceptionHandler(RuntimeException.class)
+    public Object handleRuntimeException(RuntimeException e, HttpServletResponse response) {
+        logInput(e);
+        return ResultVO.of(SYS_ERROR.getCode(), "系统异常");
+    }
+
+
+    @ExceptionHandler(NoResourceFoundException.class)
+    public Object handleNoResourceFoundException(NoResourceFoundException e, HttpServletResponse response) {
+        response.setStatus(HttpServletResponse.SC_NOT_FOUND);
+        return null;
+    }
+
+
+    @ExceptionHandler(Exception.class)
+    public Object handleException(Exception e, HttpServletResponse response) {
+        logInput(e);
+        return ResultVO.of(SYS_ERROR.getCode(), "系统异常");
+    }
+
+
+    /**
+     * 设置 log.error
+     *
+     * @param e Exception
+     */
+    private void logInput(Exception e) {
+        log.error(e.getMessage(), e);
+    }
+
+
+    /**
+     * 控制beforeBodyWrite方法的执行范围
+     *
+     * @param returnType    当前请求的方法参数类型
+     * @param converterType 消息转换器的类型
+     * @return 决定是否对特定的请求应用beforeBodyWrite方法
+     */
+    @Override
+    public boolean supports(MethodParameter returnType, Class<? extends HttpMessageConverter<?>> converterType) {
+        // returnType = ControllerExceptionHandler 触发
+        // ，如果不处理将全局有效
+        return this.getClass().isAssignableFrom(returnType.getContainingClass());
+    }
+
+    /**
+     * 响应体写入HTTP响应之前进行自定义处理
+     *
+     * @param body                  the body to be written
+     * @param returnType            the return type of the controller method
+     * @param selectedContentType   the content type selected through content negotiation
+     * @param selectedConverterType the converter type selected to write to the response
+     * @param request               the current request
+     * @param response              the current response
+     */
+    @Override
+    public Object beforeBodyWrite(Object body
+            , MethodParameter returnType
+            , MediaType selectedContentType
+            , Class<? extends HttpMessageConverter<?>> selectedConverterType
+            , ServerHttpRequest request, ServerHttpResponse response) {
+        if (body == null) {
+            return null;
+        }
+        response.getHeaders().setContentType(MediaType.APPLICATION_JSON);
+        return body;
+    }
+}

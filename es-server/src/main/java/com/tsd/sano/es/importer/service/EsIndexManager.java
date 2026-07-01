@@ -6,7 +6,7 @@ import co.elastic.clients.elasticsearch._types.Time;
 import co.elastic.clients.elasticsearch.indices.*;
 import co.elastic.clients.transport.endpoints.BooleanResponse;
 import com.tsd.sano.es.core.config.EsImportProperties;
-import com.tsd.sano.es.core.exception.BusinessException;
+import com.tsd.sano.es.core.exception.ServiceException;
 import com.tsd.sano.es.importer.model.EsImportConfig;
 import com.tsd.sano.es.importer.model.ImportContext;
 import com.tsd.sano.es.importer.util.MappingLoader;
@@ -79,7 +79,7 @@ public class EsIndexManager {
         try {
             if (exists(indexName)) {
                 // 同名索引可能是上次失败留下的半成品，稳定性优先，拒绝复用。
-                throw new BusinessException("ES import target index already exists, index=" + indexName
+                throw new ServiceException("ES import target index already exists, index=" + indexName
                         + ". Please delete the old index or use a new indexName before retry.");
             }
 
@@ -96,7 +96,7 @@ public class EsIndexManager {
                 return acknowledged;
             }
         } catch (IOException | ElasticsearchException e) {
-            throw new BusinessException("ES create index failed, index=" + indexName + ", error=" + e.getMessage());
+            throw new ServiceException("ES create index failed, index=" + indexName + ", error=" + e.getMessage());
         }
     }
 
@@ -160,7 +160,7 @@ public class EsIndexManager {
                     alias, indexName, acknowledged);
             return acknowledged;
         } catch (IOException | ElasticsearchException e) {
-            throw new BusinessException("ES bind alias failed, alias=" + alias + ", index=" + indexName
+            throw new ServiceException("ES bind alias failed, alias=" + alias + ", index=" + indexName
                     + ", error=" + e.getMessage());
         }
     }
@@ -195,7 +195,7 @@ public class EsIndexManager {
             BooleanResponse response = client.indices().exists(request -> request.index(indexName));
             return response.value();
         } catch (IOException | ElasticsearchException e) {
-            throw new BusinessException("ES check index exists failed, index=" + indexName
+            throw new ServiceException("ES check index exists failed, index=" + indexName
                     + ", error=" + e.getMessage());
         }
     }
@@ -213,7 +213,7 @@ public class EsIndexManager {
             log.info("===> ES-Import update refresh_interval. index={}, refreshInterval={}, acknowledged={}",
                     indexName, refreshInterval, response.acknowledged());
         } catch (IOException | ElasticsearchException e) {
-            throw new BusinessException("ES update refresh_interval failed, index=" + indexName
+            throw new ServiceException("ES update refresh_interval failed, index=" + indexName
                     + ", error=" + e.getMessage());
         }
     }
@@ -231,7 +231,7 @@ public class EsIndexManager {
             log.info("===> ES-Import update number_of_replicas. index={}, replicas={}, acknowledged={}",
                     indexName, replicas, response.acknowledged());
         } catch (IOException | ElasticsearchException e) {
-            throw new BusinessException("ES update number_of_replicas failed, index=" + indexName
+            throw new ServiceException("ES update number_of_replicas failed, index=" + indexName
                     + ", error=" + e.getMessage());
         }
     }
@@ -250,7 +250,7 @@ public class EsIndexManager {
                 log.warn("===> ES-Import refresh index. index={}, shards=null", indexName);
             }
         } catch (IOException | ElasticsearchException e) {
-            throw new BusinessException("ES refresh index failed, index=" + indexName
+            throw new ServiceException("ES refresh index failed, index=" + indexName
                     + ", error=" + e.getMessage());
         }
     }
@@ -268,10 +268,10 @@ public class EsIndexManager {
                 // 没有历史索引是正常场景，返回空列表即可。
                 return List.of();
             }
-            throw new BusinessException("ES list history indices failed, alias=" + alias
+            throw new ServiceException("ES list history indices failed, alias=" + alias
                     + ", error=" + e.getMessage());
         } catch (IOException e) {
-            throw new BusinessException("ES list history indices failed, alias=" + alias
+            throw new ServiceException("ES list history indices failed, alias=" + alias
                     + ", error=" + e.getMessage());
         }
     }
@@ -319,7 +319,7 @@ public class EsIndexManager {
      */
     private EsImportConfig requireConfig(ImportContext context) {
         if (context == null || context.getConfig() == null) {
-            throw new BusinessException("ES import context config cannot be null");
+            throw new ServiceException("ES import context config cannot be null");
         }
         return context.getConfig();
     }
@@ -329,7 +329,7 @@ public class EsIndexManager {
      */
     private EsImportProperties requireProperties(ImportContext context) {
         if (context == null || context.getProperties() == null) {
-            throw new BusinessException("ES import properties cannot be null");
+            throw new ServiceException("ES import properties cannot be null");
         }
         return context.getProperties();
     }
@@ -339,7 +339,7 @@ public class EsIndexManager {
      */
     private String requireText(String value, String fieldName) {
         if (StringUtils.isBlank(value)) {
-            throw new BusinessException("ES import " + fieldName + " cannot be blank");
+            throw new ServiceException("ES import " + fieldName + " cannot be blank");
         }
         return value.trim();
     }

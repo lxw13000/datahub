@@ -1,6 +1,8 @@
 package com.tsd.sano.es.controller;
 
+import com.tsd.sano.es.core.result.ResultVO;
 import com.tsd.sano.es.importer.service.EsImportService;
+import com.tsd.sano.es.search.SanoImportTaskService;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.web.bind.annotation.GetMapping;
@@ -31,6 +33,15 @@ public class EsImportController {
 
     private final EsImportService importService;
 
+    private final SanoImportTaskService importTaskService;
+
+
+    @GetMapping("/createImportTaskIndex")
+    public ResultVO<String> createImportTaskIndex() {
+        boolean index = importTaskService.createIndex();
+
+        return ResultVO.resultMsg(index, "创建导入任务索引");
+    }
 
     @GetMapping("/test2")
     public void getProgress2(String date) {

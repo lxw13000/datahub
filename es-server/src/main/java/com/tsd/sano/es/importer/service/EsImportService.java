@@ -1,7 +1,7 @@
 package com.tsd.sano.es.importer.service;
 
 import com.tsd.sano.es.core.config.EsImportProperties;
-import com.tsd.sano.es.core.exception.BusinessException;
+import com.tsd.sano.es.core.exception.ServiceException;
 import com.tsd.sano.es.importer.model.EsImportConfig;
 import com.tsd.sano.es.importer.model.ImportContext;
 import com.tsd.sano.es.importer.model.ImportStatistics;
@@ -95,7 +95,7 @@ public class EsImportService {
         String importKey = buildImportKey(config);
         if (!RUNNING_IMPORT_KEYS.add(importKey)) {
             // add返回false表示已有相同导入正在执行，直接拒绝本次重复请求。
-            throw new BusinessException("ES import task is already running, alias=" + config.getIndexAlias()
+            throw new ServiceException("ES import task is already running, alias=" + config.getIndexAlias()
                     + ", index=" + config.getIndexName()
                     + ", table=" + config.getTableName()
                     + ", date=" + config.getImportDate());
@@ -127,14 +127,14 @@ public class EsImportService {
                     // 先统计总量，避免无数据时创建空索引并挂alias。
                     long total = jdbcDataReader.count(context);
                     if (total <= 0L) {
-                        throw new BusinessException("ES import no data, table=" + config.getTableName()
+                        throw new ServiceException("ES import no data, table=" + config.getTableName()
                                 + ", date=" + config.getImportDate());
                     }
 
                     // 创建真实索引，不提前绑定alias，避免半成品索引被查询。
                     indexCreated = indexManager.createIndex(context);
                     if (!indexCreated) {
-                        throw new BusinessException("ES import create index not acknowledged, index=" + config.getIndexName());
+                        throw new ServiceException("ES import create index not acknowledged, index=" + config.getIndexName());
                     }
 
                     // 大批量写入前关闭refresh等参数，降低ES写入开销。
@@ -175,9 +175,9 @@ public class EsImportService {
                         // 导入失败也尽量恢复索引参数，避免refresh长期关闭。
                         restoreIndexQuietly(context);
                     }
-                    throw e instanceof BusinessException businessException
-                            ? businessException
-                            : new BusinessException("ES import failed, error=" + e.getMessage(), e);
+                    throw e instanceof ServiceException ServiceException
+                            ? ServiceException
+                            : new ServiceException("ES import failed, error=" + e.getMessage(), e);
                 } finally {
                     statistics.setEndTime(System.currentTimeMillis());
                     monitorFinish(context);
@@ -194,7 +194,7 @@ public class EsImportService {
      */
     private void normalizeConfig(EsImportConfig config) {
         if (config == null) {
-            throw new BusinessException("ES import config cannot be null");
+            throw new ServiceException("ES import config cannot be null");
         }
 
         String alias = requireText(config.getIndexAlias(), "indexAlias");
@@ -223,7 +223,7 @@ public class EsImportService {
         try {
             return LocalDate.parse(dateText, INDEX_DATE_FORMATTER);
         } catch (DateTimeParseException e) {
-            throw new BusinessException("ES import yyyyMMdd format invalid, value=" + yyyyMMdd, e);
+            throw new ServiceException("ES import yyyyMMdd format invalid, value=" + yyyyMMdd, e);
         }
     }
 
@@ -251,7 +251,7 @@ public class EsImportService {
                 }
             } catch (InterruptedException e) {
                 Thread.currentThread().interrupt();
-                throw new BusinessException("ES import interrupted while sending end signal", e);
+                throw new ServiceException("ES import interrupted while sending end signal", e);
             }
         }
     }
@@ -263,7 +263,7 @@ public class EsImportService {
         try {
             bulkFuture.get();
         } catch (Exception e) {
-            throw new BusinessException("ES import bulk worker failed, error=" + e.getMessage(), e);
+            throw new ServiceException("ES import bulk worker failed, error=" + e.getMessage(), e);
         }
     }
 
@@ -281,12 +281,12 @@ public class EsImportService {
 
         if (total > 0L && success <= 0L) {
             // 全部失败说明索引不可用，绝不能绑定alias。
-            throw new BusinessException("ES import all documents failed, total=" + total + ", failed=" + failed);
+            throw new ServiceException("ES import all documents failed, total=" + total + ", failed=" + failed);
         }
 
         if (failed > properties.getMaxFailedDocuments() || failureRate > properties.getMaxFailureRate()) {
             // 失败超过阈值时中断上线，避免业务查询读到明显不完整的数据。
-            throw new BusinessException("ES import failed documents exceed threshold, total=" + total
+            throw new ServiceException("ES import failed documents exceed threshold, total=" + total
                     + ", success=" + success
                     + ", failed=" + failed
                     + ", failureRate=" + String.format("%.6f", failureRate));
@@ -342,7 +342,7 @@ public class EsImportService {
      */
     private String requireText(String value, String fieldName) {
         if (StringUtils.isBlank(value)) {
-            throw new BusinessException("ES import " + fieldName + " cannot be blank");
+            throw new ServiceException("ES import " + fieldName + " cannot be blank");
         }
         return value.trim();
     }

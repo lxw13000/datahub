@@ -7,7 +7,7 @@ import co.elastic.clients.elasticsearch.core.BulkResponse;
 import co.elastic.clients.elasticsearch.core.bulk.BulkResponseItem;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.tsd.sano.es.core.config.EsImportProperties;
-import com.tsd.sano.es.core.exception.BusinessException;
+import com.tsd.sano.es.core.exception.ServiceException;
 import com.tsd.sano.es.importer.model.EsImportConfig;
 import com.tsd.sano.es.importer.model.ImportContext;
 import org.apache.commons.lang3.StringUtils;
@@ -19,11 +19,7 @@ import java.io.IOException;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
-import java.util.concurrent.ExecutorService;
-import java.util.concurrent.Executors;
-import java.util.concurrent.Future;
-import java.util.concurrent.ThreadFactory;
-import java.util.concurrent.TimeUnit;
+import java.util.concurrent.*;
 import java.util.concurrent.atomic.AtomicInteger;
 
 /**
@@ -177,7 +173,7 @@ public class EsBulkImporter {
                     // 请求级失败说明本批数据没有可靠写入，继续执行会得到不完整索引。
                     context.getStatistics().getFailed().addAndGet(rows.size());
                     logRequestFailedIds(context, rows, e.getMessage());
-                    throw new BusinessException("ES bulk import failed after retry, size=" + rows.size()
+                    throw new ServiceException("ES bulk import failed after retry, size=" + rows.size()
                             + ", error=" + e.getMessage(), e);
                 }
 
@@ -330,7 +326,7 @@ public class EsBulkImporter {
             return context.getQueue().take();
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
-            throw new BusinessException("ES bulk importer interrupted while waiting queue", e);
+            throw new ServiceException("ES bulk importer interrupted while waiting queue", e);
         }
     }
 
@@ -392,7 +388,7 @@ public class EsBulkImporter {
             }
         } catch (Exception e) {
             executor.shutdownNow();
-            throw new BusinessException("ES bulk importer worker failed, error=" + e.getMessage(), e);
+            throw new ServiceException("ES bulk importer worker failed, error=" + e.getMessage(), e);
         }
     }
 
@@ -404,7 +400,7 @@ public class EsBulkImporter {
             Thread.sleep(Math.max(0, millis));
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
-            throw new BusinessException("ES bulk retry interrupted", e);
+            throw new ServiceException("ES bulk retry interrupted", e);
         }
     }
 
@@ -413,7 +409,7 @@ public class EsBulkImporter {
      */
     private EsImportConfig requireConfig(ImportContext context) {
         if (context == null || context.getConfig() == null) {
-            throw new BusinessException("ES import context config cannot be null");
+            throw new ServiceException("ES import context config cannot be null");
         }
         return context.getConfig();
     }
@@ -423,7 +419,7 @@ public class EsBulkImporter {
      */
     private EsImportProperties requireProperties(ImportContext context) {
         if (context == null || context.getProperties() == null) {
-            throw new BusinessException("ES import properties cannot be null");
+            throw new ServiceException("ES import properties cannot be null");
         }
         return context.getProperties();
     }
@@ -433,7 +429,7 @@ public class EsBulkImporter {
      */
     private String requireText(String value, String fieldName) {
         if (StringUtils.isBlank(value)) {
-            throw new BusinessException("ES import " + fieldName + " cannot be blank");
+            throw new ServiceException("ES import " + fieldName + " cannot be blank");
         }
         return value.trim();
     }

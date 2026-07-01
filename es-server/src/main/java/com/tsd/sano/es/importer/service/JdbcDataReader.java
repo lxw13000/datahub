@@ -1,6 +1,6 @@
 package com.tsd.sano.es.importer.service;
 
-import com.tsd.sano.es.core.exception.BusinessException;
+import com.tsd.sano.es.core.exception.ServiceException;
 import com.tsd.sano.es.importer.model.EsImportConfig;
 import com.tsd.sano.es.importer.model.ImportContext;
 import org.apache.commons.lang3.StringUtils;
@@ -186,7 +186,7 @@ public class JdbcDataReader {
         String dtColumn = requireColumnName(config.getDtColumn(), "dtColumn");
         LocalDate importDate = config.getImportDate();
         if (importDate == null) {
-            throw new BusinessException("ES import importDate cannot be null when whereSql is blank");
+            throw new ServiceException("ES import importDate cannot be null when whereSql is blank");
         }
 
         // 默认T+1场景按日期分区字段过滤，参数化传入日期值。
@@ -204,7 +204,7 @@ public class JdbcDataReader {
             }
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
-            throw new BusinessException("ES import reader interrupted while waiting queue", e);
+            throw new ServiceException("ES import reader interrupted while waiting queue", e);
         }
     }
 
@@ -218,7 +218,7 @@ public class JdbcDataReader {
 
         Throwable reason = context.getAbortReason();
         String message = reason == null ? "unknown" : reason.getMessage();
-        throw new BusinessException("ES import reader stopped because bulk importer failed, error=" + message, reason);
+        throw new ServiceException("ES import reader stopped because bulk importer failed, error=" + message, reason);
     }
 
     /**
@@ -241,7 +241,7 @@ public class JdbcDataReader {
     private long extractLastId(List<Map<String, Object>> rows, String idColumn) {
         Object value = rows.getLast().get(idColumn);
         if (value == null) {
-            throw new BusinessException("ES import idColumn value cannot be null, idColumn=" + idColumn);
+            throw new ServiceException("ES import idColumn value cannot be null, idColumn=" + idColumn);
         }
         if (value instanceof Number number) {
             // 数据库数字类型可直接转换为long游标。
@@ -251,7 +251,7 @@ public class JdbcDataReader {
             // 兼容JDBC驱动将数字ID返回为字符串的情况。
             return Long.parseLong(value.toString());
         } catch (NumberFormatException e) {
-            throw new BusinessException("ES import idColumn must be numeric, idColumn=" + idColumn
+            throw new ServiceException("ES import idColumn must be numeric, idColumn=" + idColumn
                     + ", value=" + value);
         }
     }
@@ -263,13 +263,13 @@ public class JdbcDataReader {
      */
     private EsImportConfig requireConfig(ImportContext context) {
         if (context == null || context.getConfig() == null) {
-            throw new BusinessException("ES import context config cannot be null");
+            throw new ServiceException("ES import context config cannot be null");
         }
         if (context.getStatistics() == null) {
-            throw new BusinessException("ES import context statistics cannot be null");
+            throw new ServiceException("ES import context statistics cannot be null");
         }
         if (context.getProperties() == null) {
-            throw new BusinessException("ES import properties cannot be null");
+            throw new ServiceException("ES import properties cannot be null");
         }
         return context.getConfig();
     }
@@ -280,7 +280,7 @@ public class JdbcDataReader {
     private String requireTableName(String tableName) {
         String value = requireText(tableName, "tableName");
         if (!TABLE_NAME_PATTERN.matcher(value).matches()) {
-            throw new BusinessException("ES import tableName is invalid: " + tableName);
+            throw new ServiceException("ES import tableName is invalid: " + tableName);
         }
         return value;
     }
@@ -291,7 +291,7 @@ public class JdbcDataReader {
     private String requireColumnName(String columnName, String fieldName) {
         String value = requireText(columnName, fieldName);
         if (!COLUMN_NAME_PATTERN.matcher(value).matches()) {
-            throw new BusinessException("ES import " + fieldName + " is invalid: " + columnName);
+            throw new ServiceException("ES import " + fieldName + " is invalid: " + columnName);
         }
         return value;
     }
@@ -301,7 +301,7 @@ public class JdbcDataReader {
      */
     private String requireText(String value, String fieldName) {
         if (StringUtils.isBlank(value)) {
-            throw new BusinessException("ES import " + fieldName + " cannot be blank");
+            throw new ServiceException("ES import " + fieldName + " cannot be blank");
         }
         return value.trim();
     }
