@@ -88,9 +88,9 @@ public class EsImportProperties {
     private String cron = "0 30 2 * * ?";
 
     /**
-     * 每轮定时调度最大运行小时数，超过后不再启动下一条任务
+     * 每轮调度最大运行分钟数，超过后不再启动下一条任务
      */
-    private int maxRunHours = 8;
+    private int maxRunMinutes = 480;
 
     /**
      * 每轮调度最多拉取的待执行任务数量
@@ -216,12 +216,12 @@ public class EsImportProperties {
         this.cron = cron;
     }
 
-    public int getMaxRunHours() {
-        return maxRunHours;
+    public int getMaxRunMinutes() {
+        return maxRunMinutes;
     }
 
-    public void setMaxRunHours(int maxRunHours) {
-        this.maxRunHours = maxRunHours;
+    public void setMaxRunMinutes(int maxRunMinutes) {
+        this.maxRunMinutes = maxRunMinutes;
     }
 
     public int getTaskFetchLimit() {

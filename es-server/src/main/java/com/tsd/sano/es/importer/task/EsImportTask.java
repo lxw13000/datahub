@@ -75,8 +75,8 @@ public class EsImportTask {
         LocalDate importDate = LocalDate.now().minusDays(1);
         try {
             long deadlineMillis = System.currentTimeMillis() + maxRunMillis();
-            log.info("===> ES-Import scheduled task start. date={}, maxRunHours={}",
-                    importDate, properties.getMaxRunHours());
+            log.info("===> ES-Import scheduled task start. date={}, maxRunMinutes={}",
+                    importDate, properties.getMaxRunMinutes());
 
             repairExpiredRunningTasks();
             createPendingTasks(importDate);
@@ -106,8 +106,8 @@ public class EsImportTask {
             esImportExecutor.execute(() -> {
                 try {
                     long deadlineMillis = System.currentTimeMillis() + maxRunMillis();
-                    log.info("===> ES-Import manual task start. startDate={}, endDate={}, maxRunHours={}",
-                            startDate, endDate, properties.getMaxRunHours());
+                    log.info("===> ES-Import manual task start. startDate={}, endDate={}, maxRunMinutes={}",
+                            startDate, endDate, properties.getMaxRunMinutes());
 
                     repairExpiredRunningTasks();
                     for (LocalDate importDate = startDate; !importDate.isAfter(endDate); importDate = importDate.plusDays(1)) {
@@ -138,7 +138,7 @@ public class EsImportTask {
      */
     private void repairExpiredRunningTasks() {
         try {
-            LocalDateTime expireBefore = LocalDateTime.now().minusHours(Math.max(1, properties.getMaxRunHours()));
+            LocalDateTime expireBefore = LocalDateTime.now().minusMinutes(Math.max(1, properties.getMaxRunMinutes()));
             List<SanoImportTask> tasks = importTaskService.listRunningTasks(properties.getTaskFetchLimit());
 
             for (SanoImportTask task : tasks) {
@@ -194,8 +194,8 @@ public class EsImportTask {
             for (SanoImportTask task : tasks) {
                 if (System.currentTimeMillis() >= deadlineMillis) {
                     // 本轮调度到达运行上限后不再启动新任务，已经完成落库的PENDING任务留待下一轮继续。
-                    log.warn("===> ES-Import scheduled task reach max run time, stop starting new task. maxRunHours={}",
-                            properties.getMaxRunHours());
+                    log.warn("===> ES-Import scheduled task reach max run time, stop starting new task. maxRunMinutes={}",
+                            properties.getMaxRunMinutes());
                     return;
                 }
 
@@ -300,6 +300,6 @@ public class EsImportTask {
      * 计算本轮调度最大运行毫秒数。
      */
     private long maxRunMillis() {
-        return Math.max(1, properties.getMaxRunHours()) * 60L * 60L * 1000L;
+        return Math.max(1, properties.getMaxRunMinutes()) * 60L * 1000L;
     }
 }
