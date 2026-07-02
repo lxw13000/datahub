@@ -56,6 +56,16 @@ public class EsImportConfig {
      */
     private long startId;
 
+    /**
+     * 导入完成是否删除该表历史索引
+     */
+    private boolean deleteHistoryIndex;
+
+    /**
+     * 该表历史索引保留天数
+     */
+    private int reserveDays = 30;
+
     public String getIndexAlias() {
         return indexAlias;
     }
@@ -126,5 +136,21 @@ public class EsImportConfig {
 
     public void setStartId(long startId) {
         this.startId = startId;
+    }
+
+    public boolean isDeleteHistoryIndex() {
+        return deleteHistoryIndex;
+    }
+
+    public void setDeleteHistoryIndex(boolean deleteHistoryIndex) {
+        this.deleteHistoryIndex = deleteHistoryIndex;
+    }
+
+    public int getReserveDays() {
+        return reserveDays;
+    }
+
+    public void setReserveDays(int reserveDays) {
+        this.reserveDays = reserveDays;
     }
 }

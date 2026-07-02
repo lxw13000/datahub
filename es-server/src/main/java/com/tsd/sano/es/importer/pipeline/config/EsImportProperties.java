@@ -68,16 +68,6 @@ public class EsImportProperties {
     private boolean enableMonitor = true;
 
     /**
-     * 导入完成是否删除历史索引
-     */
-    private boolean deleteHistoryIndex = false;
-
-    /**
-     * 保留历史索引天数
-     */
-    private int reserveDays = 30;
-
-    /**
      * 导入期间是否关闭Refresh
      */
     private boolean disableRefresh = true;
@@ -194,22 +184,6 @@ public class EsImportProperties {
         this.enableMonitor = enableMonitor;
     }
 
-    public boolean isDeleteHistoryIndex() {
-        return deleteHistoryIndex;
-    }
-
-    public void setDeleteHistoryIndex(boolean deleteHistoryIndex) {
-        this.deleteHistoryIndex = deleteHistoryIndex;
-    }
-
-    public int getReserveDays() {
-        return reserveDays;
-    }
-
-    public void setReserveDays(int reserveDays) {
-        this.reserveDays = reserveDays;
-    }
-
     public boolean isDisableRefresh() {
         return disableRefresh;
     }
@@ -306,6 +280,16 @@ public class EsImportProperties {
          */
         private String dtColumn = "dt";
 
+        /**
+         * 导入完成是否删除该表历史索引
+         */
+        private boolean deleteHistoryIndex = false;
+
+        /**
+         * 该表历史索引保留天数
+         */
+        private int reserveDays = 30;
+
         public boolean isEnabled() {
             return enabled;
         }
@@ -360,6 +344,22 @@ public class EsImportProperties {
 
         public void setDtColumn(String dtColumn) {
             this.dtColumn = dtColumn;
+        }
+
+        public boolean isDeleteHistoryIndex() {
+            return deleteHistoryIndex;
+        }
+
+        public void setDeleteHistoryIndex(boolean deleteHistoryIndex) {
+            this.deleteHistoryIndex = deleteHistoryIndex;
+        }
+
+        public int getReserveDays() {
+            return reserveDays;
+        }
+
+        public void setReserveDays(int reserveDays) {
+            this.reserveDays = reserveDays;
         }
     }
 }

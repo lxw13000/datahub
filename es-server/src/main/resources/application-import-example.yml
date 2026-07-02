@@ -44,10 +44,6 @@ sano:
       disable-refresh: true
       # 导入期间是否关闭副本
       disable-replica: true
-      # 导入完成是否删除历史索引
-      delete-history-index: false
-      # 保留历史索引天数
-      reserve-days: 30
 
       tables:
         - enabled: true
@@ -56,5 +52,9 @@ sano:
           mapping-file: sano_wallet_coin_record.json
           id-column: id
           dt-column: dt
+          # 导入完成是否删除该表历史索引
+          delete-history-index: false
+          # 该表历史索引保留天数
+          reserve-days: 30
           # where-sql为空时自动使用 dt = importDate
           where-sql:

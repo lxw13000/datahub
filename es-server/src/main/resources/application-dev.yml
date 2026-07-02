@@ -91,16 +91,16 @@ sano:
       disable-refresh: true
       # 导入期间是否关闭副本
       disable-replica: true
-      # 导入完成是否删除历史索引
-      delete-history-index: false
-      # 保留历史索引天数
-      reserve-days: 30
 
       tables:
         - enabled: true
           index-alias: sano_wallet_coin_record
           table-name: sano_wallet_coin_record
           mapping-file: sano_wallet_coin_record.json
+          # 导入完成是否删除该表历史索引
+          delete-history-index: false
+          # 该表历史索引保留天数
+          reserve-days: 30
           id-column: id
           dt-column: dt
           # where-sql为空时自动使用 dt = importDate
@@ -109,6 +109,10 @@ sano:
           index-alias: sano_wallet_diamond_record
           table-name: sano_wallet_diamond_record
           mapping-file: sano_wallet_diamond_record.json
+          # 导入完成是否删除该表历史索引
+          delete-history-index: false
+          # 该表历史索引保留天数
+          reserve-days: 30
           id-column: id
           dt-column: dt
           # where-sql为空时自动使用 dt = importDate
@@ -117,6 +121,10 @@ sano:
           index-alias: sano_wallet_lucky_diamond_record_10m
           table-name: sano_wallet_lucky_diamond_record_10m
           mapping-file: sano_wallet_lucky_diamond_record_10m.json
+          # 导入完成是否删除该表历史索引
+          delete-history-index: false
+          # 该表历史索引保留天数
+          reserve-days: 30
           id-column: id
           dt-column: dt
           # where-sql为空时自动使用 dt = importDate

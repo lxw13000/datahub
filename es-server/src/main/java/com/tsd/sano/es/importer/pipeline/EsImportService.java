@@ -1,7 +1,7 @@
 package com.tsd.sano.es.importer.pipeline;
 
-import com.tsd.sano.es.importer.pipeline.config.EsImportProperties;
 import com.tsd.sano.es.core.exception.ServiceException;
+import com.tsd.sano.es.importer.pipeline.config.EsImportProperties;
 import com.tsd.sano.es.importer.pipeline.model.EsImportConfig;
 import com.tsd.sano.es.importer.pipeline.model.ImportContext;
 import com.tsd.sano.es.importer.pipeline.model.ImportStatistics;
@@ -68,30 +68,6 @@ public class EsImportService {
     }
 
     /**
-     * 按指定日期导入数据，主要用于开发和测试回放某一天的数据。
-     *
-     * @param indexAlias  业务alias，默认也作为表名
-     * @param mappingFile resources/esmapping目录下的mapping文件名
-     * @param yyyyMMdd    导入日期，格式为yyyyMMdd
-     * @return 导入统计
-     */
-    public ImportStatistics importAppointDay(String indexAlias, String mappingFile, String yyyyMMdd) {
-        EsImportConfig config = new EsImportConfig();
-        config.setIndexAlias(indexAlias);
-        config.setTableName(indexAlias);
-        config.setMappingFile(mappingFile);
-        config.setImportDate(parseImportDate(yyyyMMdd));
-        return importData(config);
-    }
-
-    /**
-     * 按完整配置执行一次导入。
-     */
-    public ImportStatistics importData(EsImportConfig config) {
-        return importData(config, 0L, false);
-    }
-
-    /**
      * 按完整配置执行一次导入，可用于限时任务和断点续跑。
      *
      * @param config         导入配置
@@ -128,7 +104,6 @@ public class EsImportService {
                 return thread;
             })) {
 
-                boolean indexCreated = false;
                 boolean optimized = false;
 
                 try {
@@ -156,13 +131,11 @@ public class EsImportService {
                         if (!indexManager.exists(config.getIndexName())) {
                             throw new ServiceException("ES import resume index not exists, index=" + config.getIndexName());
                         }
-                        indexCreated = true;
                         log.info("===> ES-Import reuse partial index. index={}, startId={}",
                                 config.getIndexName(), config.getStartId());
                     } else {
                         // 创建真实索引，不提前绑定alias，避免半成品索引被查询。
-                        indexCreated = indexManager.createIndex(context);
-                        if (!indexCreated) {
+                        if (!indexManager.createIndex(context)) {
                             throw new ServiceException("ES import create index not acknowledged, index=" + config.getIndexName());
                         }
                     }

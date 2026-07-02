@@ -5,8 +5,8 @@ import co.elastic.clients.elasticsearch._types.ElasticsearchException;
 import co.elastic.clients.elasticsearch._types.Time;
 import co.elastic.clients.elasticsearch.indices.*;
 import co.elastic.clients.transport.endpoints.BooleanResponse;
-import com.tsd.sano.es.importer.pipeline.config.EsImportProperties;
 import com.tsd.sano.es.core.exception.ServiceException;
+import com.tsd.sano.es.importer.pipeline.config.EsImportProperties;
 import com.tsd.sano.es.importer.pipeline.model.EsImportConfig;
 import com.tsd.sano.es.importer.pipeline.model.ImportContext;
 import com.tsd.sano.es.importer.util.MappingLoader;
@@ -19,11 +19,6 @@ import java.io.IOException;
 import java.io.InputStream;
 import java.time.LocalDate;
 import java.time.format.DateTimeFormatter;
-import java.time.format.DateTimeParseException;
-import java.util.ArrayList;
-import java.util.Comparator;
-import java.util.List;
-import java.util.Map;
 
 /**
  * ES索引生命周期管理器。
@@ -166,27 +161,29 @@ public class EsIndexManager {
     }
 
     /**
-     * 按配置清理历史真实索引。
+     * 按当前表配置清理一个刚过保留期的历史真实索引。
      */
     public void deleteHistoryIndices(ImportContext context) {
         EsImportConfig config = requireConfig(context);
-        EsImportProperties properties = requireProperties(context);
 
-        if (!properties.isDeleteHistoryIndex()) {
+        if (!config.isDeleteHistoryIndex()) {
             return;
         }
 
         String alias = requireText(config.getIndexAlias(), "indexAlias");
         String currentIndex = requireText(config.getIndexName(), "indexName");
-        LocalDate keepAfter = LocalDate.now().minusDays(properties.getReserveDays());
+        int reserveDays = Math.max(1, config.getReserveDays());
+        LocalDate expiredDate = requireImportDate(config).minusDays(reserveDays);
+        String expiredIndex = alias + "_" + INDEX_DATE_FORMATTER.format(expiredDate);
 
-        // 仅清理符合 alias_yyyyMMdd 命名规则且早于保留日期的索引。
-        List<String> candidates = listHistoryIndices(alias);
-        candidates.stream()
-                .filter(index -> !index.equals(currentIndex))
-                .filter(index -> isBeforeKeepDate(alias, index, keepAfter))
-                .sorted(Comparator.naturalOrder())
-                .forEach(this::deleteIndexQuietly);
+        // 每次成功导入最多删除一个过期索引，避免扫描alias_*和误删非标准索引。
+        if (StringUtils.equals(expiredIndex, currentIndex)) {
+            return;
+        }
+        if (!exists(expiredIndex)) {
+            return;
+        }
+        deleteIndexQuietly(expiredIndex);
     }
 
     public boolean exists(String indexName) {
@@ -256,52 +253,6 @@ public class EsIndexManager {
     }
 
     /**
-     * 查询业务alias对应的历史真实索引列表。
-     */
-    private List<String> listHistoryIndices(String alias) {
-        try {
-            GetIndexResponse response = client.indices().get(request -> request.index(alias + "_*"));
-            Map<String, IndexState> indices = response.result();
-            return new ArrayList<>(indices.keySet());
-        } catch (ElasticsearchException e) {
-            if (e.status() == 404) {
-                // 没有历史索引是正常场景，返回空列表即可。
-                return List.of();
-            }
-            throw new ServiceException("ES list history indices failed, alias=" + alias
-                    + ", error=" + e.getMessage());
-        } catch (IOException e) {
-            throw new ServiceException("ES list history indices failed, alias=" + alias
-                    + ", error=" + e.getMessage());
-        }
-    }
-
-    /**
-     * 判断索引日期是否早于保留边界。
-     */
-    private boolean isBeforeKeepDate(String alias, String indexName, LocalDate keepAfter) {
-        String prefix = alias + "_";
-        if (!indexName.startsWith(prefix)) {
-            return false;
-        }
-
-        String dateText = indexName.substring(prefix.length());
-        // 当前真实索引约定为 alias_yyyyMMdd，格式不匹配时不做自动删除。
-        if (dateText.length() != 8) {
-            return false;
-        }
-
-        try {
-            LocalDate indexDate = LocalDate.parse(dateText, INDEX_DATE_FORMATTER);
-            return indexDate.isBefore(keepAfter);
-        } catch (DateTimeParseException e) {
-            // 日期无法解析时不自动删除，避免误删非标准命名索引。
-            log.warn("===> ES-Import skip history index with unparsable date. index={}", indexName);
-            return false;
-        }
-    }
-
-    /**
      * 删除历史索引，失败只记录日志，不影响本次导入成功结果。
      */
     private void deleteIndexQuietly(String indexName) {
@@ -342,5 +293,15 @@ public class EsIndexManager {
             throw new ServiceException("ES import " + fieldName + " cannot be blank");
         }
         return value.trim();
+    }
+
+    /**
+     * 校验导入日期，历史索引清理需要按业务日期计算。
+     */
+    private LocalDate requireImportDate(EsImportConfig config) {
+        if (config.getImportDate() == null) {
+            throw new ServiceException("ES import importDate cannot be null");
+        }
+        return config.getImportDate();
     }
 }
