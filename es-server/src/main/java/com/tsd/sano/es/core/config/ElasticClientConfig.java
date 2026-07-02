@@ -21,6 +21,8 @@ import org.springframework.boot.autoconfigure.condition.ConditionalOnMissingBean
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 
+import java.net.URI;
+
 
 @Configuration
 public class ElasticClientConfig {
@@ -130,12 +132,21 @@ public class ElasticClientConfig {
         HttpHost[] httpHosts = new HttpHost[hostArray.length];
 
         for (int i = 0; i < hostArray.length; i++) {
-            String[] parts = hostArray[i].split(":");
-            httpHosts[i] = new HttpHost(
-                    parts[0],
-                    Integer.parseInt(parts[1]),
-                    "http"
-            );
+            String host = hostArray[i].trim();
+            if (StringUtils.isBlank(host)) {
+                throw new ServiceException("elasticsearch hosts contains blank node");
+            }
+
+            // 支持 host、host:port、http://host:port、https://host:port 四种写法。
+            URI uri = URI.create(host.contains("://") ? host : "http://" + host);
+            String scheme = StringUtils.defaultIfBlank(uri.getScheme(), "http");
+            int port = uri.getPort();
+            if (port < 0) {
+                // 未显式配置端口时，按协议使用默认端口。
+                port = "https".equalsIgnoreCase(scheme) ? 443 : 80;
+            }
+
+            httpHosts[i] = new HttpHost(uri.getHost(), port, scheme);
         }
 
         return httpHosts;

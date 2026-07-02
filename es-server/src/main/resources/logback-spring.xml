@@ -94,6 +94,21 @@
         </encoder>
     </appender>
 
+    <!-- ===================== 查询API专项日志 ===================== -->
+    <appender name="SEARCH_API_FILE" class="ch.qos.logback.core.rolling.RollingFileAppender">
+        <file>${LOG_DAY_DIR}/${APP_NAME}-search-api.log</file>
+        <rollingPolicy class="ch.qos.logback.core.rolling.SizeAndTimeBasedRollingPolicy">
+            <fileNamePattern>${LOG_DIR}/%d{yyyyMMdd}/${APP_NAME}-search-api.%i.log.gz</fileNamePattern>
+            <maxFileSize>${MAX_FILE_SIZE}</maxFileSize>
+            <maxHistory>${MAX_HISTORY}</maxHistory>
+            <totalSizeCap>${TOTAL_SIZE_CAP}</totalSizeCap>
+        </rollingPolicy>
+        <encoder>
+            <pattern>${FILE_PATTERN}</pattern>
+            <charset>UTF-8</charset>
+        </encoder>
+    </appender>
+
     <!-- ===================== 异步文件包装 ===================== -->
     <appender name="ASYNC_FILE" class="ch.qos.logback.classic.AsyncAppender">
         <appender-ref ref="FILE"/>
@@ -123,6 +138,13 @@
         <includeCallerData>false</includeCallerData>
     </appender>
 
+    <appender name="ASYNC_SEARCH_API_FILE" class="ch.qos.logback.classic.AsyncAppender">
+        <appender-ref ref="SEARCH_API_FILE"/>
+        <queueSize>${ASYNC_QUEUE_SIZE}</queueSize>
+        <discardingThreshold>0</discardingThreshold>
+        <includeCallerData>false</includeCallerData>
+    </appender>
+
     <!-- ===================== 开发环境 ===================== -->
     <springProfile name="dev">
         <appender name="DEV_CONSOLE" class="ch.qos.logback.core.ConsoleAppender">
@@ -147,6 +169,14 @@
         <!-- 导入失败ID独立落文件，避免混入普通导入进度日志。 -->
         <logger name="com.tsd.sano.es.importer.error" level="ERROR" additivity="false">
             <appender-ref ref="ASYNC_IMPORT_ERROR_FILE"/>
+        </logger>
+
+        <!-- 查询API日志单独落文件，同时继续向 root 传递，便于开发控制台观察。 -->
+        <logger name="com.tsd.sano.es.controller.sta" level="DEBUG" additivity="true">
+            <appender-ref ref="ASYNC_SEARCH_API_FILE"/>
+        </logger>
+        <logger name="com.tsd.sano.es.search" level="DEBUG" additivity="true">
+            <appender-ref ref="ASYNC_SEARCH_API_FILE"/>
         </logger>
 
         <root level="INFO">
@@ -181,6 +211,14 @@
         <!-- 导入失败ID独立落文件，便于按表名和ID回查数据源。 -->
         <logger name="com.tsd.sano.es.importer.error" level="ERROR" additivity="false">
             <appender-ref ref="ASYNC_IMPORT_ERROR_FILE"/>
+        </logger>
+
+        <!-- 查询API日志单独落文件，同时继续向 root 传递，便于统一排查。 -->
+        <logger name="com.tsd.sano.es.controller.sta" level="INFO" additivity="true">
+            <appender-ref ref="ASYNC_SEARCH_API_FILE"/>
+        </logger>
+        <logger name="com.tsd.sano.es.search" level="INFO" additivity="true">
+            <appender-ref ref="ASYNC_SEARCH_API_FILE"/>
         </logger>
 
         <root level="INFO">
