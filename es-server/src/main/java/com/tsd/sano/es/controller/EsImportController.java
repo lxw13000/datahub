@@ -1,13 +1,19 @@
 package com.tsd.sano.es.controller;
 
+import com.tsd.sano.es.core.exception.ServiceException;
 import com.tsd.sano.es.core.result.ResultVO;
-import com.tsd.sano.es.importer.pipeline.EsImportService;
+import com.tsd.sano.es.importer.task.EsImportTask;
 import com.tsd.sano.es.importer.taskstore.SanoImportTaskService;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.apache.commons.lang3.StringUtils;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
+
+import java.time.LocalDate;
+import java.time.format.DateTimeFormatter;
+import java.time.format.DateTimeParseException;
 
 /**
  * ES数据导入控制器
@@ -31,10 +37,15 @@ import org.springframework.web.bind.annotation.RestController;
 @Slf4j
 public class EsImportController {
 
-    private final EsImportService importService;
+    /**
+     * 手动导入接口日期格式。
+     */
+    private static final DateTimeFormatter IMPORT_DATE_FORMATTER = DateTimeFormatter.BASIC_ISO_DATE;
+
 
     private final SanoImportTaskService importTaskService;
 
+    private final EsImportTask importTask;
 
     @GetMapping("/createImportTaskIndex")
     public ResultVO<String> createImportTaskIndex() {
@@ -43,9 +54,21 @@ public class EsImportController {
         return ResultVO.resultMsg(index, "创建导入任务索引");
     }
 
-    @GetMapping("/test2")
-    public void getProgress2(String date) {
-        importService.importAppointDay("sano_wallet_coin_record", "sano_wallet_coin_record.json", date);
+    /**
+     * 手动补指定日期的数据，日期格式为yyyyMMdd。
+     */
+    @GetMapping("/importAppointDay")
+    public ResultVO<String> importAppointDay(String date) {
+        if (StringUtils.isBlank(date)) {
+            throw new ServiceException("导入日期不能为空，请使用yyyyMMdd，例如：20260701");
+        }
+        try {
+            LocalDate importDate = LocalDate.parse(date, IMPORT_DATE_FORMATTER);
+            boolean submitted = importTask.importAppointDay(importDate);
+            return ResultVO.resultMsg(submitted, "指定日期导入任务提交");
+        } catch (DateTimeParseException e) {
+            throw new ServiceException("导入日期格式错误，请使用yyyyMMdd，例如：20260701");
+        }
     }
 
 }

@@ -1,7 +1,7 @@
 package com.tsd.sano.es.importer.task;
 
-import com.tsd.sano.es.importer.pipeline.config.EsImportProperties;
 import com.tsd.sano.es.importer.pipeline.EsImportService;
+import com.tsd.sano.es.importer.pipeline.config.EsImportProperties;
 import com.tsd.sano.es.importer.pipeline.model.EsImportConfig;
 import com.tsd.sano.es.importer.pipeline.model.ImportStatistics;
 import com.tsd.sano.es.importer.taskstore.SanoImportTaskService;
@@ -10,6 +10,7 @@ import com.tsd.sano.es.importer.taskstore.model.SanoImportTaskStatus;
 import org.apache.commons.lang3.StringUtils;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Component;
@@ -18,6 +19,8 @@ import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.time.format.DateTimeFormatter;
 import java.util.List;
+import java.util.concurrent.Executor;
+import java.util.concurrent.atomic.AtomicBoolean;
 
 /**
  * ES定时导入任务。
@@ -35,19 +38,27 @@ public class EsImportTask {
      */
     private static final DateTimeFormatter IMPORT_DATE_FORMATTER = DateTimeFormatter.BASIC_ISO_DATE;
 
+    /**
+     * 任务分发互斥锁，避免手动补数和定时任务同时扫描并执行同一批PENDING任务。
+     */
+    private static final AtomicBoolean TASK_DISPATCHING = new AtomicBoolean(false);
+
     private final EsImportProperties properties;
     private final EsImportService importService;
     private final SanoImportTaskService importTaskService;
+    private final Executor esImportExecutor;
 
     /**
      * 注入导入配置、导入服务和任务索引服务。
      */
     public EsImportTask(EsImportProperties properties,
                         EsImportService importService,
-                        SanoImportTaskService importTaskService) {
+                        SanoImportTaskService importTaskService,
+                        @Qualifier("esImportExecutor") Executor esImportExecutor) {
         this.properties = properties;
         this.importService = importService;
         this.importTaskService = importTaskService;
+        this.esImportExecutor = esImportExecutor;
     }
 
     /**
@@ -55,16 +66,65 @@ public class EsImportTask {
      */
     @Scheduled(cron = "${sano.es.import.cron:0 30 2 * * ?}")
     public void importYesterday() {
+        if (!TASK_DISPATCHING.compareAndSet(false, true)) {
+            // 已有手动或定时导入正在执行，本轮定时任务跳过，待下一轮继续扫描任务索引。
+            log.warn("===> ES-Import scheduled task skipped because another import dispatcher is running.");
+            return;
+        }
+
         LocalDate importDate = LocalDate.now().minusDays(1);
-        long deadlineMillis = System.currentTimeMillis() + maxRunMillis();
-        log.info("===> ES-Import scheduled task start. date={}, maxRunHours={}",
-                importDate, properties.getMaxRunHours());
+        try {
+            long deadlineMillis = System.currentTimeMillis() + maxRunMillis();
+            log.info("===> ES-Import scheduled task start. date={}, maxRunHours={}",
+                    importDate, properties.getMaxRunHours());
 
-        repairExpiredRunningTasks();
-        createPendingTasks(importDate);
-        runPendingTasks(deadlineMillis);
+            repairExpiredRunningTasks();
+            createPendingTasks(importDate);
+            runPendingTasks(deadlineMillis);
 
-        log.info("===> ES-Import scheduled task finished. date={}", importDate);
+            log.info("===> ES-Import scheduled task finished. date={}", importDate);
+        } finally {
+            TASK_DISPATCHING.set(false);
+        }
+    }
+
+    /**
+     * 手动补指定日期的数据，先创建PENDING任务，再复用定时任务的待处理队列执行逻辑。
+     *
+     * @param importDate 导入日期
+     * @return true表示已提交后台执行，false表示已有导入任务正在执行
+     */
+    public boolean importAppointDay(LocalDate importDate) {
+        if (!TASK_DISPATCHING.compareAndSet(false, true)) {
+            log.warn("===> ES-Import manual task submit skipped because another import dispatcher is running. date={}",
+                    importDate);
+            return false;
+        }
+        try {
+            esImportExecutor.execute(() -> {
+                try {
+                    long deadlineMillis = System.currentTimeMillis() + maxRunMillis();
+                    log.info("===> ES-Import manual task start. date={}, maxRunHours={}",
+                            importDate, properties.getMaxRunHours());
+
+                    repairExpiredRunningTasks();
+                    createPendingTasks(importDate);
+                    runPendingTasks(deadlineMillis);
+
+                    log.info("===> ES-Import manual task finished. date={}", importDate);
+                } catch (Exception e) {
+                    // 异步任务异常不会返回给HTTP调用方，必须在后台线程中明确记录。
+                    log.error("===> ES-Import manual task failed. date={}, error={}", importDate, e.getMessage(), e);
+                } finally {
+                    TASK_DISPATCHING.set(false);
+                }
+            });
+            return true;
+        } catch (Exception e) {
+            TASK_DISPATCHING.set(false);
+            log.error("===> ES-Import manual task submit failed. date={}, error={}", importDate, e.getMessage(), e);
+            return false;
+        }
     }
 
     /**
