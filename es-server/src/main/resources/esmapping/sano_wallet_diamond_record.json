@@ -29,6 +29,7 @@
     }
   },
   "mappings": {
+    "dynamic": "strict",
     "properties": {
       "id": {
         "type": "long"

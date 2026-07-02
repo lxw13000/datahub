@@ -29,6 +29,7 @@
     }
   },
   "mappings": {
+    "dynamic": "strict",
     "properties": {
       "dt": {
         "type": "date",
