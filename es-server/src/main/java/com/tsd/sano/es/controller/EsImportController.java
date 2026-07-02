@@ -17,19 +17,10 @@ import java.time.format.DateTimeParseException;
 
 /**
  * ES数据导入控制器
- * 提供数据库连接、元数据查询、数据导入ES等接口
- * <p>
- * 主要功能：
- * 1. 获取数据库连接列表
- * 2. 查询数据库、表、字段元数据
- * 3. 查询表数据预览
- * 4. 异步导入数据到ES
- * 5. 查询导入任务进度
  *
  * @author lxw
  * @version V1.1
  * @date 2024-7-18
- * @updated 2025-10-31 新增任务进度查询接口
  */
 @RestController
 @RequestMapping("/import")
@@ -64,10 +55,34 @@ public class EsImportController {
         }
         try {
             LocalDate importDate = LocalDate.parse(date, IMPORT_DATE_FORMATTER);
-            boolean submitted = importTask.importAppointDay(importDate);
+            boolean submitted = importTask.importDateRange(importDate, importDate);
             return ResultVO.resultMsg(submitted, "指定日期导入任务提交");
         } catch (DateTimeParseException e) {
             throw new ServiceException("导入日期格式错误，请使用yyyyMMdd，例如：20260701");
+        }
+    }
+
+    /**
+     * 手动补指定日期段的数据，日期格式为yyyyMMdd，起止日期均包含。
+     */
+    @GetMapping("/importDateRange")
+    public ResultVO<String> importDateRange(String startDate, String endDate) {
+        if (StringUtils.isBlank(startDate) || StringUtils.isBlank(endDate)) {
+            throw new ServiceException("导入日期段不能为空，请使用yyyyMMdd，例如：startDate=20260601&endDate=20260605");
+        }
+        try {
+            LocalDate start = LocalDate.parse(startDate, IMPORT_DATE_FORMATTER);
+            LocalDate end = LocalDate.parse(endDate, IMPORT_DATE_FORMATTER);
+            if (start.isAfter(end)) {
+                throw new ServiceException("开始日期不能大于结束日期");
+            }
+            if (end.isAfter(LocalDate.now())) {
+                throw new ServiceException("结束日期不能是未来时间");
+            }
+            boolean submitted = importTask.importDateRange(start, end);
+            return ResultVO.resultMsg(submitted, "指定日期段导入任务提交");
+        } catch (DateTimeParseException e) {
+            throw new ServiceException("导入日期格式错误，请使用yyyyMMdd，例如：startDate=20260601&endDate=20260605");
         }
     }
 

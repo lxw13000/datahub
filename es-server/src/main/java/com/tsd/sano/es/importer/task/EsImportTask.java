@@ -89,32 +89,37 @@ public class EsImportTask {
     }
 
     /**
-     * 手动补指定日期的数据，先创建PENDING任务，再复用定时任务的待处理队列执行逻辑。
+     * 手动补指定日期段的数据，起止日期相同即补指定单天。
      *
-     * @param importDate 导入日期
+     * @param startDate 开始日期，包含
+     * @param endDate   结束日期，包含
      * @return true表示已提交后台执行，false表示已有导入任务正在执行
      */
-    public boolean importAppointDay(LocalDate importDate) {
+    public boolean importDateRange(LocalDate startDate, LocalDate endDate) {
         if (!TASK_DISPATCHING.compareAndSet(false, true)) {
-            log.warn("===> ES-Import manual task submit skipped because another import dispatcher is running. date={}",
-                    importDate);
+            log.warn("===> ES-Import manual task submit skipped because another import dispatcher is running. startDate={}, endDate={}",
+                    startDate, endDate);
             return false;
         }
+
         try {
             esImportExecutor.execute(() -> {
                 try {
                     long deadlineMillis = System.currentTimeMillis() + maxRunMillis();
-                    log.info("===> ES-Import manual task start. date={}, maxRunHours={}",
-                            importDate, properties.getMaxRunHours());
+                    log.info("===> ES-Import manual task start. startDate={}, endDate={}, maxRunHours={}",
+                            startDate, endDate, properties.getMaxRunHours());
 
                     repairExpiredRunningTasks();
-                    createPendingTasks(importDate);
+                    for (LocalDate importDate = startDate; !importDate.isAfter(endDate); importDate = importDate.plusDays(1)) {
+                        createPendingTasks(importDate);
+                    }
                     runPendingTasks(deadlineMillis);
 
-                    log.info("===> ES-Import manual task finished. date={}", importDate);
+                    log.info("===> ES-Import manual task finished. startDate={}, endDate={}", startDate, endDate);
                 } catch (Exception e) {
                     // 异步任务异常不会返回给HTTP调用方，必须在后台线程中明确记录。
-                    log.error("===> ES-Import manual task failed. date={}, error={}", importDate, e.getMessage(), e);
+                    log.error("===> ES-Import manual task failed. startDate={}, endDate={}, error={}",
+                            startDate, endDate, e.getMessage(), e);
                 } finally {
                     TASK_DISPATCHING.set(false);
                 }
@@ -122,7 +127,8 @@ public class EsImportTask {
             return true;
         } catch (Exception e) {
             TASK_DISPATCHING.set(false);
-            log.error("===> ES-Import manual task submit failed. date={}, error={}", importDate, e.getMessage(), e);
+            log.error("===> ES-Import manual task submit failed. startDate={}, endDate={}, error={}",
+                    startDate, endDate, e.getMessage(), e);
             return false;
         }
     }
