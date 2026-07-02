@@ -1,10 +1,13 @@
 package com.tsd.sano.es.controller.sta.dto;
 
+import lombok.Data;
+
 import java.util.List;
 
 /**
  * 金币周统计查询参数。
  */
+@Data
 public class SatCoinWeekDTO {
 
     /**
@@ -21,28 +24,4 @@ public class SatCoinWeekDTO {
      * 结束时间，格式：yyyy-MM-dd HH:mm:ss。
      */
     private String endTime;
-
-    public List<Integer> getRoomIds() {
-        return roomIds;
-    }
-
-    public void setRoomIds(List<Integer> roomIds) {
-        this.roomIds = roomIds;
-    }
-
-    public String getStartTime() {
-        return startTime;
-    }
-
-    public void setStartTime(String startTime) {
-        this.startTime = startTime;
-    }
-
-    public String getEndTime() {
-        return endTime;
-    }
-
-    public void setEndTime(String endTime) {
-        this.endTime = endTime;
-    }
 }
