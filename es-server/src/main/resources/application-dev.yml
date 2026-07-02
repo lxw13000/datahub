@@ -15,6 +15,13 @@ spring:
     url: jdbc:mysql://47.128.144.26:3306/sano?useUnicode=true&characterEncoding=UTF8&zeroDateTimeBehavior=convertToNull&allowMultiQueries=true&useSSL=false&serverTimezone=Asia/Chongqing&allowPublicKeyRetrieval=true
     username: ${MYSQL_UNM:root}
     password: ${MYSQL_PWD:SADFH28!asoaignljASjacoOs}
+    hikari:
+      # 导入任务串行读取MySQL，限制连接池规模，避免误触发并发任务占用过多数据库连接。
+      maximum-pool-size: 5
+      minimum-idle: 1
+      connection-timeout: 30000
+      idle-timeout: 600000
+      max-lifetime: 1800000
 
 logging:
   config: classpath:logback-spring.xml
@@ -52,7 +59,7 @@ sano:
       # 默认关闭；确认ES和数据库配置无误后再打开
       task-enabled: true
       # 每天02:30导入昨天的数据
-      cron: "0 12 13 * * ?"
+      cron: "0 31 13 * * ?"
       # 每轮定时调度最多运行8小时，超时后不再启动下一条待执行任务
       max-run-hours: 8
       # 每轮调度最多拉取100条待执行任务，覆盖多表和少量历史积压场景

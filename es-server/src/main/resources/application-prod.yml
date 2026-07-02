@@ -15,6 +15,13 @@ spring:
     url: jdbc:mysql://database-1-instance-1-ap-southeast-1b.cbiiioywwvwg.ap-southeast-1.rds.amazonaws.com:3306/sano-prod?useUnicode=true&characterEncoding=UTF8&zeroDateTimeBehavior=convertToNull&allowMultiQueries=true&useSSL=false&serverTimezone=Asia/Chongqing&allowPublicKeyRetrieval=true
     username: ${MYSQL_UNM:admin}
     password: ${MYSQL_PWD:fl#alHGaldsj!skgnn2850allgnJsHg}
+    hikari:
+      # 导入任务串行读取MySQL，生产限制连接池规模，避免误触发并发任务占用过多数据库连接。
+      maximum-pool-size: 5
+      minimum-idle: 1
+      connection-timeout: 30000
+      idle-timeout: 600000
+      max-lifetime: 1800000
 
 logging:
   config: classpath:logback-spring.xml
