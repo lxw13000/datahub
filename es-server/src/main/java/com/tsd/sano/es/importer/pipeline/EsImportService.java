@@ -123,6 +123,8 @@ public class EsImportService {
                         // 指定日期无数据属于正常业务结果，不创建空索引、不切换alias，任务状态按SUCCESS处理。
                         log.warn("===> ES-Import no data, skip import. alias={}, table={}, date={}",
                                 config.getIndexAlias(), config.getTableName(), config.getImportDate());
+                        // 即使当天无数据，也按表级保留策略尝试清理一个刚过期的历史索引。
+                        indexManager.deleteHistoryIndices(context);
                         return statistics;
                     }
 
