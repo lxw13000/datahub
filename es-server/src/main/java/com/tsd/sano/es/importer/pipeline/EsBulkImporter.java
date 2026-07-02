@@ -1,4 +1,4 @@
-package com.tsd.sano.es.importer.service;
+package com.tsd.sano.es.importer.pipeline;
 
 import co.elastic.clients.elasticsearch.ElasticsearchClient;
 import co.elastic.clients.elasticsearch._types.Refresh;
@@ -6,10 +6,10 @@ import co.elastic.clients.elasticsearch.core.BulkRequest;
 import co.elastic.clients.elasticsearch.core.BulkResponse;
 import co.elastic.clients.elasticsearch.core.bulk.BulkResponseItem;
 import com.fasterxml.jackson.databind.ObjectMapper;
-import com.tsd.sano.es.core.config.EsImportProperties;
+import com.tsd.sano.es.importer.pipeline.config.EsImportProperties;
 import com.tsd.sano.es.core.exception.ServiceException;
-import com.tsd.sano.es.importer.model.EsImportConfig;
-import com.tsd.sano.es.importer.model.ImportContext;
+import com.tsd.sano.es.importer.pipeline.model.EsImportConfig;
+import com.tsd.sano.es.importer.pipeline.model.ImportContext;
 import org.apache.commons.lang3.StringUtils;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;

@@ -1,7 +1,7 @@
-package com.tsd.sano.es.importer.service;
+package com.tsd.sano.es.importer.pipeline;
 
-import com.tsd.sano.es.importer.model.ImportContext;
-import com.tsd.sano.es.importer.model.ImportStatistics;
+import com.tsd.sano.es.importer.pipeline.model.ImportContext;
+import com.tsd.sano.es.importer.pipeline.model.ImportStatistics;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;

@@ -1,4 +1,4 @@
-package com.tsd.sano.es.core.config;
+package com.tsd.sano.es.importer.pipeline.config;
 
 import org.springframework.boot.context.properties.ConfigurationProperties;
 import org.springframework.stereotype.Component;

@@ -1,14 +1,14 @@
-package com.tsd.sano.es.importer.service;
+package com.tsd.sano.es.importer.pipeline;
 
 import co.elastic.clients.elasticsearch.ElasticsearchClient;
 import co.elastic.clients.elasticsearch._types.ElasticsearchException;
 import co.elastic.clients.elasticsearch._types.Time;
 import co.elastic.clients.elasticsearch.indices.*;
 import co.elastic.clients.transport.endpoints.BooleanResponse;
-import com.tsd.sano.es.core.config.EsImportProperties;
+import com.tsd.sano.es.importer.pipeline.config.EsImportProperties;
 import com.tsd.sano.es.core.exception.ServiceException;
-import com.tsd.sano.es.importer.model.EsImportConfig;
-import com.tsd.sano.es.importer.model.ImportContext;
+import com.tsd.sano.es.importer.pipeline.model.EsImportConfig;
+import com.tsd.sano.es.importer.pipeline.model.ImportContext;
 import com.tsd.sano.es.importer.util.MappingLoader;
 import org.apache.commons.lang3.StringUtils;
 import org.slf4j.Logger;

@@ -1,12 +1,12 @@
 package com.tsd.sano.es.importer.task;
 
-import com.tsd.sano.es.core.config.EsImportProperties;
-import com.tsd.sano.es.importer.model.EsImportConfig;
-import com.tsd.sano.es.importer.model.ImportStatistics;
-import com.tsd.sano.es.importer.service.EsImportService;
-import com.tsd.sano.es.search.SanoImportTaskService;
-import com.tsd.sano.es.search.model.SanoImportTask;
-import com.tsd.sano.es.search.model.SanoImportTaskStatus;
+import com.tsd.sano.es.importer.pipeline.config.EsImportProperties;
+import com.tsd.sano.es.importer.pipeline.EsImportService;
+import com.tsd.sano.es.importer.pipeline.model.EsImportConfig;
+import com.tsd.sano.es.importer.pipeline.model.ImportStatistics;
+import com.tsd.sano.es.importer.taskstore.SanoImportTaskService;
+import com.tsd.sano.es.importer.taskstore.model.SanoImportTask;
+import com.tsd.sano.es.importer.taskstore.model.SanoImportTaskStatus;
 import org.apache.commons.lang3.StringUtils;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;

@@ -1,4 +1,4 @@
-package com.tsd.sano.es.search;
+package com.tsd.sano.es.importer.taskstore;
 
 import co.elastic.clients.elasticsearch.ElasticsearchClient;
 import co.elastic.clients.elasticsearch._types.ElasticsearchException;
@@ -16,8 +16,8 @@ import co.elastic.clients.elasticsearch.indices.CreateIndexResponse;
 import co.elastic.clients.transport.endpoints.BooleanResponse;
 import com.tsd.sano.es.core.exception.ServiceException;
 import com.tsd.sano.es.importer.util.MappingLoader;
-import com.tsd.sano.es.search.model.SanoImportTask;
-import com.tsd.sano.es.search.model.SanoImportTaskStatus;
+import com.tsd.sano.es.importer.taskstore.model.SanoImportTask;
+import com.tsd.sano.es.importer.taskstore.model.SanoImportTaskStatus;
 import org.apache.commons.lang3.StringUtils;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;

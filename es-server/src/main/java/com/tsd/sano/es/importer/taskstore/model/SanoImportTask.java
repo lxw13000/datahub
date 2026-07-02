@@ -1,4 +1,4 @@
-package com.tsd.sano.es.search.model;
+package com.tsd.sano.es.importer.taskstore.model;
 
 import com.fasterxml.jackson.annotation.JsonFormat;
 import com.fasterxml.jackson.annotation.JsonIgnore;

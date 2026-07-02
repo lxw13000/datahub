@@ -1,10 +1,10 @@
-package com.tsd.sano.es.importer.model;
+package com.tsd.sano.es.importer.pipeline.model;
 
 import java.util.concurrent.atomic.AtomicLong;
 
 /**
  * 导入统计
- *
+ * <p>
  * 全局共享
  *
  * @author lxw

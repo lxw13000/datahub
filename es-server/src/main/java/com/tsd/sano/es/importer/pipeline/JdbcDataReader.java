@@ -1,8 +1,8 @@
-package com.tsd.sano.es.importer.service;
+package com.tsd.sano.es.importer.pipeline;
 
 import com.tsd.sano.es.core.exception.ServiceException;
-import com.tsd.sano.es.importer.model.EsImportConfig;
-import com.tsd.sano.es.importer.model.ImportContext;
+import com.tsd.sano.es.importer.pipeline.model.EsImportConfig;
+import com.tsd.sano.es.importer.pipeline.model.ImportContext;
 import org.apache.commons.lang3.StringUtils;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;

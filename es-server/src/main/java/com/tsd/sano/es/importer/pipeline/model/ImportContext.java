@@ -1,7 +1,7 @@
-package com.tsd.sano.es.importer.model;
+package com.tsd.sano.es.importer.pipeline.model;
 
 
-import com.tsd.sano.es.core.config.EsImportProperties;
+import com.tsd.sano.es.importer.pipeline.config.EsImportProperties;
 
 import java.util.List;
 import java.util.Map;

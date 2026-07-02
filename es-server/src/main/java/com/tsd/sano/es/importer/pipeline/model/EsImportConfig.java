@@ -1,4 +1,4 @@
-package com.tsd.sano.es.importer.model;
+package com.tsd.sano.es.importer.pipeline.model;
 
 import java.time.LocalDate;
 

@@ -1,4 +1,4 @@
-package com.tsd.sano.es.search.model;
+package com.tsd.sano.es.importer.taskstore.model;
 
 /**
  * ES导入任务状态。

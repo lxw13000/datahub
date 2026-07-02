@@ -1,8 +1,8 @@
 package com.tsd.sano.es.controller;
 
 import com.tsd.sano.es.core.result.ResultVO;
-import com.tsd.sano.es.importer.service.EsImportService;
-import com.tsd.sano.es.search.SanoImportTaskService;
+import com.tsd.sano.es.importer.pipeline.EsImportService;
+import com.tsd.sano.es.importer.taskstore.SanoImportTaskService;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.web.bind.annotation.GetMapping;
