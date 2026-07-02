@@ -1,28 +1,13 @@
 <?xml version="1.0" encoding="UTF-8"?>
-<!--
-  ============================================================================
-  Sano ES Server Logback 配置
-
-  dev:
-  - 控制台彩色输出，便于本地调试。
-  - 业务包默认DEBUG，文件保留周期较短。
-
-  prod:
-  - 控制台输出保持简洁，适合Docker日志采集。
-  - 文件按全量、错误、ES导入三类拆分，保留周期较长。
-
-  日志级别、路径、滚动策略由 application-dev.yml / application-prod.yml 控制。
-  ============================================================================
--->
 <configuration scan="true" scanPeriod="60 seconds">
 
     <!-- 应用名，用于日志文件命名。 -->
     <springProperty scope="context" name="APP_NAME" source="spring.application.name" defaultValue="es-server"/>
 
-    <!-- 日志根目录，开发默认项目 logs，生产建议通过 LOG_DIR 挂载到容器外部目录。 -->
+    <!-- 日志根目录，生产环境建议通过 LOG_DIR 挂载到容器外部目录。 -->
     <springProperty scope="context" name="LOG_DIR" source="logging.file.path" defaultValue="logs"/>
 
-    <!-- 每天一个日期目录，格式如 logs/20260630/es-server.log。 -->
+    <!-- 每天一个日期目录，例如 logs/20260630/es-server.log。 -->
     <timestamp key="LOG_DATE" datePattern="yyyyMMdd"/>
     <property name="LOG_DAY_DIR" value="${LOG_DIR}/${LOG_DATE}"/>
 
@@ -32,33 +17,17 @@
     <springProperty scope="context" name="TOTAL_SIZE_CAP" source="sano.log.total-size-cap" defaultValue="10GB"/>
     <springProperty scope="context" name="ASYNC_QUEUE_SIZE" source="sano.log.async-queue-size" defaultValue="4096"/>
 
-    <!-- 文件日志不使用颜色，保证日志采集和检索稳定。 -->
+    <!-- 文件日志不使用颜色，保证采集和检索稳定。 -->
     <property name="FILE_PATTERN"
               value="%d{yyyy-MM-dd HH:mm:ss.SSS} [%thread] %-5level %logger{40} [%X{traceId:-}] - %msg%n"/>
 
-    <!-- 开发控制台彩色格式，突出时间、级别、业务logger。 -->
+    <!-- 开发控制台彩色格式。 -->
     <property name="DEV_CONSOLE_PATTERN"
               value="%cyan(%d{HH:mm:ss.SSS}) %magenta([%thread]) %highlight(%-5level) %green(%logger{36}) %yellow([%X{traceId:-}]) - %msg%n"/>
 
-    <!-- 生产控制台格式保持无色，适合Docker stdout采集。 -->
+    <!-- 生产控制台无色格式，适合 Docker stdout 采集。 -->
     <property name="PROD_CONSOLE_PATTERN"
               value="%d{yyyy-MM-dd HH:mm:ss.SSS} [%thread] %-5level %logger{40} [%X{traceId:-}] - %msg%n"/>
-
-    <!-- ===================== 控制台：开发彩色 ===================== -->
-    <appender name="DEV_CONSOLE" class="ch.qos.logback.core.ConsoleAppender">
-        <encoder>
-            <pattern>${DEV_CONSOLE_PATTERN}</pattern>
-            <charset>UTF-8</charset>
-        </encoder>
-    </appender>
-
-    <!-- ===================== 控制台：生产简洁 ===================== -->
-    <appender name="PROD_CONSOLE" class="ch.qos.logback.core.ConsoleAppender">
-        <encoder>
-            <pattern>${PROD_CONSOLE_PATTERN}</pattern>
-            <charset>UTF-8</charset>
-        </encoder>
-    </appender>
 
     <!-- ===================== 全量文件日志 ===================== -->
     <appender name="FILE" class="ch.qos.logback.core.rolling.RollingFileAppender">
@@ -156,6 +125,13 @@
 
     <!-- ===================== 开发环境 ===================== -->
     <springProfile name="dev">
+        <appender name="DEV_CONSOLE" class="ch.qos.logback.core.ConsoleAppender">
+            <encoder>
+                <pattern>${DEV_CONSOLE_PATTERN}</pattern>
+                <charset>UTF-8</charset>
+            </encoder>
+        </appender>
+
         <logger name="com.tsd.sano.es" level="DEBUG"/>
         <logger name="org.springframework.jdbc.core" level="DEBUG"/>
         <logger name="co.elastic.clients" level="INFO"/>
@@ -163,7 +139,7 @@
         <logger name="io.lettuce.core" level="INFO"/>
         <logger name="com.zaxxer.hikari" level="INFO"/>
 
-        <!-- 导入相关日志单独落文件，同时继续向root传递。 -->
+        <!-- 导入相关日志单独落文件，同时继续向 root 传递。 -->
         <logger name="com.tsd.sano.es.importer" level="DEBUG" additivity="true">
             <appender-ref ref="ASYNC_IMPORT_FILE"/>
         </logger>
@@ -182,6 +158,13 @@
 
     <!-- ===================== 生产环境 ===================== -->
     <springProfile name="prod">
+        <appender name="PROD_CONSOLE" class="ch.qos.logback.core.ConsoleAppender">
+            <encoder>
+                <pattern>${PROD_CONSOLE_PATTERN}</pattern>
+                <charset>UTF-8</charset>
+            </encoder>
+        </appender>
+
         <logger name="com.tsd.sano.es" level="INFO"/>
         <logger name="org.springframework" level="INFO"/>
         <logger name="org.springframework.jdbc.core" level="INFO"/>

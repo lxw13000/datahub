@@ -97,6 +97,22 @@ sano:
           dt-column: dt
           # where-sql为空时自动使用 dt = importDate
           where-sql:
+        - enabled: true
+          index-alias: sano_wallet_diamond_record
+          table-name: sano_wallet_diamond_record
+          mapping-file: sano_wallet_diamond_record.json
+          id-column: id
+          dt-column: dt
+          # where-sql为空时自动使用 dt = importDate
+          where-sql:
+        - enabled: true
+          index-alias: sano_wallet_lucky_diamond_record_10m
+          table-name: sano_wallet_lucky_diamond_record_10m
+          mapping-file: sano_wallet_lucky_diamond_record_10m.json
+          id-column: id
+          dt-column: dt
+          # where-sql为空时自动使用 dt = importDate
+          where-sql:
 
 
 
