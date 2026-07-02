@@ -60,7 +60,7 @@ sano:
       # 默认关闭；确认ES和数据库配置无误后再打开
       task-enabled: true
       # 每天02:30导入昨天的数据
-      cron: "0 31 15 * * ?"
+      cron: "0 31 20 * * ?"
       # 每轮定时调度最多运行8小时，超时后不再启动下一条待执行任务
       max-run-hours: 8
       # 每轮调度最多拉取100条待执行任务，覆盖多表和少量历史积压场景
@@ -98,9 +98,9 @@ sano:
           table-name: sano_wallet_coin_record
           mapping-file: sano_wallet_coin_record.json
           # 导入完成是否删除该表历史索引
-          delete-history-index: false
+          delete-history-index: true
           # 该表历史索引保留天数
-          reserve-days: 30
+          reserve-days: 4
           id-column: id
           dt-column: dt
           # where-sql为空时自动使用 dt = importDate
@@ -110,9 +110,9 @@ sano:
           table-name: sano_wallet_diamond_record
           mapping-file: sano_wallet_diamond_record.json
           # 导入完成是否删除该表历史索引
-          delete-history-index: false
+          delete-history-index: true
           # 该表历史索引保留天数
-          reserve-days: 30
+          reserve-days: 3
           id-column: id
           dt-column: dt
           # where-sql为空时自动使用 dt = importDate
@@ -122,9 +122,9 @@ sano:
           table-name: sano_wallet_lucky_diamond_record_10m
           mapping-file: sano_wallet_lucky_diamond_record_10m.json
           # 导入完成是否删除该表历史索引
-          delete-history-index: false
+          delete-history-index: true
           # 该表历史索引保留天数
-          reserve-days: 30
+          reserve-days: 3
           id-column: id
           dt-column: dt
           # where-sql为空时自动使用 dt = importDate
