@@ -65,7 +65,7 @@ sano:
       # 每轮调度最多拉取100条待执行任务，覆盖多表和少量历史积压场景
       task-fetch-limit: 100
       # 每批读取数据库数量
-      read-batch-size: 10000
+      read-batch-size: 15000
       # Bulk线程数
       worker-count: 4
       # BlockingQueue 队列缓存容量；每个元素是一批read-batch-size数据，生产环境不宜过大。
