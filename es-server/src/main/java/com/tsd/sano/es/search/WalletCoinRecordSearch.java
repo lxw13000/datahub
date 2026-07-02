@@ -3,11 +3,17 @@ package com.tsd.sano.es.search;
 import co.elastic.clients.elasticsearch.ElasticsearchClient;
 import co.elastic.clients.elasticsearch._types.ElasticsearchException;
 import co.elastic.clients.elasticsearch._types.FieldValue;
+import co.elastic.clients.elasticsearch._types.SortOrder;
 import co.elastic.clients.elasticsearch._types.aggregations.Aggregate;
-import co.elastic.clients.elasticsearch._types.query_dsl.*;
+import co.elastic.clients.elasticsearch._types.query_dsl.BoolQuery;
+import co.elastic.clients.elasticsearch._types.query_dsl.TermQuery;
 import co.elastic.clients.elasticsearch.core.SearchRequest;
 import co.elastic.clients.elasticsearch.core.SearchResponse;
+import co.elastic.clients.elasticsearch.core.search.Hit;
+import com.tsd.sano.es.controller.sta.vo.CoinRecordVO;
 import com.tsd.sano.es.controller.sta.vo.WeekStatVO;
+import com.tsd.sano.es.search.util.EsSearchUtil;
+import org.apache.commons.lang3.StringUtils;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
@@ -29,6 +35,9 @@ public class WalletCoinRecordSearch {
 
     private static final Logger log = LoggerFactory.getLogger(WalletCoinRecordSearch.class);
     private final ElasticsearchClient client;
+    private static final String DATE_FORMAT = "yyyy-MM-dd HH:mm:ss";
+    private static final int DEFAULT_PAGE_SIZE = 100;
+    private static final int MAX_PAGE_SIZE = 500;
 
     public WalletCoinRecordSearch(ElasticsearchClient client) {
         this.client = client;
@@ -44,28 +53,14 @@ public class WalletCoinRecordSearch {
      */
     public WeekStatVO staWeek(List<Integer> roomIds, String startTime, String endTime) {
 
-        String index = EsIndexAlias.SANO_WALLET_COIN_RECORD;
         SearchRequest.Builder searchBuilder = new SearchRequest.Builder();
-        searchBuilder.index(index);
+        searchBuilder.index(EsIndexAlias.SANO_WALLET_COIN_RECORD);
         BoolQuery.Builder boolBuilder = new BoolQuery.Builder();
-        List<FieldValue> values2 = new ArrayList<>();
-        for (Integer str : roomIds) {
-            values2.add(FieldValue.of(str));
-        }
+
         // 房间集合
-        boolBuilder.must(TermsQuery.of(t -> t
-                .field("room_id")
-                .terms(new TermsQueryField.Builder()
-                        .value(values2).build())
-        )._toQuery());
+        boolBuilder.must(EsSearchUtil.getTermsOr("room_id", roomIds));
         // 时间段
-        boolBuilder.must(RangeQuery.of(r -> r
-                .date(d -> d.field("create_time")
-                        .format("yyyy-MM-dd HH:mm:ss")
-                        .gte(startTime)
-                        .lte(endTime)
-                )
-        )._toQuery());
+        EsSearchUtil.setDateEQ(boolBuilder, "create_time", DATE_FORMAT, startTime, endTime);
         // 消费
         boolBuilder.must(TermQuery.of(t -> t.field("status").value(-1))._toQuery());
         searchBuilder.query(boolBuilder.build()._toQuery()).from(0).size(0);
@@ -99,6 +94,56 @@ public class WalletCoinRecordSearch {
             log.error("ES search wallet coin week stat failed, roomCount={}, startTime={}, endTime={}, error={}",
                     roomIds.size(), startTime, endTime, e.getMessage(), e);
             return new WeekStatVO();
+        }
+    }
+
+
+    /**
+     * 深分页查询用户金币流水，按create_time、id倒序返回。
+     *
+     * @param userId         用户ID
+     * @param startTime      开始时间，格式yyyy-MM-dd HH:mm:ss
+     * @param endTime        结束时间，格式yyyy-MM-dd HH:mm:ss
+     * @param pageSize       每页条数
+     * @param lastCreateTime 上一页最后一条记录的create_time
+     * @param lastId         上一页最后一条记录的id
+     * @return 金币流水列表
+     */
+    public List<CoinRecordVO> searchCoinRecords(Long userId, String startTime, String endTime, Integer pageSize,
+                                                String lastCreateTime, Long lastId) {
+        SearchRequest.Builder searchBuilder = new SearchRequest.Builder();
+        searchBuilder.index(EsIndexAlias.SANO_WALLET_COIN_RECORD);
+        BoolQuery.Builder boolBuilder = new BoolQuery.Builder();
+
+        // 固定查询用户ID，ES字段使用下划线命名。
+        boolBuilder.must(TermQuery.of(t -> t.field("user_id").value(userId))._toQuery());
+        // 时间段
+        EsSearchUtil.setDateEQ(boolBuilder, "create_time", DATE_FORMAT, startTime, endTime);
+        searchBuilder.query(boolBuilder.build()._toQuery());
+
+        // search_after深分页必须和排序字段一一对应，顺序也必须保持一致。
+        searchBuilder.sort(s -> s.field(f -> f.field("create_time").order(SortOrder.Desc)));
+        searchBuilder.sort(s -> s.field(f -> f.field("id").order(SortOrder.Desc)));
+        searchBuilder.size(pageSize);
+        if (StringUtils.isNotBlank(lastCreateTime) && lastId != null) {
+            searchBuilder.searchAfter(List.of(FieldValue.of(lastCreateTime), FieldValue.of(lastId)));
+        }
+
+        try {
+            SearchResponse<CoinRecordVO> response = client.search(searchBuilder.build(), CoinRecordVO.class);
+            List<CoinRecordVO> records = new ArrayList<>();
+            for (Hit<CoinRecordVO> hit : response.hits().hits()) {
+                if (hit.source() != null) {
+                    records.add(hit.source());
+                }
+            }
+            log.info("===> ES-Search coin records. userId={}, startTime={}, endTime={}, pageSize={}, lastCreateTime={}, lastId={}, size={}",
+                    userId, startTime, endTime, pageSize, lastCreateTime, lastId, records.size());
+            return records;
+        } catch (IOException | ElasticsearchException e) {
+            log.error("ES search coin records failed, userId={}, startTime={}, endTime={}, pageSize={}, lastCreateTime={}, lastId={}, error={}",
+                    userId, startTime, endTime, pageSize, lastCreateTime, lastId, e.getMessage(), e);
+            return new ArrayList<>();
         }
     }
 
