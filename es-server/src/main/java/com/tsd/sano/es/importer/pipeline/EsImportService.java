@@ -145,8 +145,10 @@ public class EsImportService {
                     // 先统计总量，避免无数据时创建空索引并挂alias。
                     long total = jdbcDataReader.count(context);
                     if (total <= 0L) {
-                        throw new ServiceException("ES import no data, table=" + config.getTableName()
-                                + ", date=" + config.getImportDate());
+                        // 指定日期无数据属于正常业务结果，不创建空索引、不切换alias，任务状态按SUCCESS处理。
+                        log.warn("===> ES-Import no data, skip import. alias={}, table={}, date={}",
+                                config.getIndexAlias(), config.getTableName(), config.getImportDate());
+                        return statistics;
                     }
 
                     if (resumeIndex) {
