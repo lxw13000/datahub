@@ -20,8 +20,9 @@ spring:
       maximum-pool-size: 5
       minimum-idle: 1
       connection-timeout: 30000
-      idle-timeout: 600000
-      max-lifetime: 1800000
+      idle-timeout: 300000
+      max-lifetime: 1200000
+      keepalive-time: 300000
 
 logging:
   config: classpath:logback-spring.xml
