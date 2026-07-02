@@ -14,7 +14,6 @@ import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Component;
 
-import jakarta.annotation.PostConstruct;
 import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.time.format.DateTimeFormatter;
@@ -52,14 +51,6 @@ public class EsImportTask {
     }
 
     /**
-     * 服务启动后修复上次异常退出留下的RUNNING任务。
-     */
-    @PostConstruct
-    public void repairRunningTasksOnStart() {
-        repairExpiredRunningTasks();
-    }
-
-    /**
      * 每天按配置生成T+1导入任务，并串行执行所有待处理任务。
      */
     @Scheduled(cron = "${sano.es.import.cron:0 30 2 * * ?}")
@@ -80,21 +71,26 @@ public class EsImportTask {
      * 将超过运行窗口仍处于RUNNING的任务恢复为TIMEOUT_PARTIAL。
      */
     private void repairExpiredRunningTasks() {
-        LocalDateTime expireBefore = LocalDateTime.now().minusHours(Math.max(1, properties.getMaxRunHours()));
-        List<SanoImportTask> tasks = importTaskService.listRunningTasks(properties.getTaskFetchLimit());
+        try {
+            LocalDateTime expireBefore = LocalDateTime.now().minusHours(Math.max(1, properties.getMaxRunHours()));
+            List<SanoImportTask> tasks = importTaskService.listRunningTasks(properties.getTaskFetchLimit());
 
-        for (SanoImportTask task : tasks) {
-            if (task.getUpdatedAt() == null || !task.getUpdatedAt().isBefore(expireBefore)) {
-                continue;
+            for (SanoImportTask task : tasks) {
+                if (task.getUpdatedAt() == null || !task.getUpdatedAt().isBefore(expireBefore)) {
+                    continue;
+                }
+
+                LocalDateTime expiredUpdatedAt = task.getUpdatedAt();
+                task.setStatus(SanoImportTaskStatus.TIMEOUT_PARTIAL.name());
+                task.setLastError("Recovered expired RUNNING task before scheduled import.");
+                task.setFinishedAt(LocalDateTime.now());
+                importTaskService.updateTask(task);
+                log.warn("===> ES-Import repair expired running task. taskId={}, alias={}, table={}, date={}, updatedAt={}",
+                        task.getTaskId(), task.getIndexAlias(), task.getTableName(), task.getImportDate(), expiredUpdatedAt);
             }
-
-            LocalDateTime expiredUpdatedAt = task.getUpdatedAt();
-            task.setStatus(SanoImportTaskStatus.TIMEOUT_PARTIAL.name());
-            task.setLastError("Recovered expired RUNNING task before scheduled import.");
-            task.setFinishedAt(LocalDateTime.now());
-            importTaskService.updateTask(task);
-            log.warn("===> ES-Import repair expired running task. taskId={}, alias={}, table={}, date={}, updatedAt={}",
-                    task.getTaskId(), task.getIndexAlias(), task.getTableName(), task.getImportDate(), expiredUpdatedAt);
+        } catch (Exception e) {
+            // RUNNING残留修复失败不阻断本轮任务，后续创建和执行任务继续进行。
+            log.warn("===> ES-Import repair expired running task failed, continue scheduled import. error={}", e.getMessage());
         }
     }
 
