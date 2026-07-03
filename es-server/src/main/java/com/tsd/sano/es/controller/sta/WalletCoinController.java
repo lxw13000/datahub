@@ -53,8 +53,9 @@ public class WalletCoinController {
      */
     @PostMapping("/searchCoinRecords")
     public ResultVO<List<CoinRecordVO>> searchCoinRecords(@RequestBody AppCoinRecordDTO recordDTO) {
-        List<CoinRecordVO> coinRecordVOS = walletCoinRecordSearch.searchCoinRecords(recordDTO.getUserId(), recordDTO.getStartTime()
-                , recordDTO.getEndTime(), recordDTO.getPageSize()
+        List<CoinRecordVO> coinRecordVOS = walletCoinRecordSearch.searchCoinRecords(
+                recordDTO.getUserId(), recordDTO.getBusinessType()
+                , recordDTO.getStartTime(), recordDTO.getEndTime(), recordDTO.getPageSize()
                 , recordDTO.getLastCreateTime(), recordDTO.getLastId()
         );
         return ResultVO.success(coinRecordVOS);

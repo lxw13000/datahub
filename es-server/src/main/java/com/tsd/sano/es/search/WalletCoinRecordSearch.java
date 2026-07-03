@@ -36,8 +36,6 @@ public class WalletCoinRecordSearch {
     private static final Logger log = LoggerFactory.getLogger(WalletCoinRecordSearch.class);
     private final ElasticsearchClient client;
     private static final String DATE_FORMAT = "yyyy-MM-dd HH:mm:ss";
-    private static final int DEFAULT_PAGE_SIZE = 100;
-    private static final int MAX_PAGE_SIZE = 500;
 
     public WalletCoinRecordSearch(ElasticsearchClient client) {
         this.client = client;
@@ -102,6 +100,7 @@ public class WalletCoinRecordSearch {
      * 深分页查询用户金币流水，按create_time、id倒序返回。
      *
      * @param userId         用户ID
+     * @param businessType   业务类型
      * @param startTime      开始时间，格式yyyy-MM-dd HH:mm:ss
      * @param endTime        结束时间，格式yyyy-MM-dd HH:mm:ss
      * @param pageSize       每页条数
@@ -109,14 +108,21 @@ public class WalletCoinRecordSearch {
      * @param lastId         上一页最后一条记录的id
      * @return 金币流水列表
      */
-    public List<CoinRecordVO> searchCoinRecords(Long userId, String startTime, String endTime, Integer pageSize,
+    public List<CoinRecordVO> searchCoinRecords(Long userId, Long businessType,
+                                                String startTime, String endTime, Integer pageSize,
                                                 String lastCreateTime, Long lastId) {
         SearchRequest.Builder searchBuilder = new SearchRequest.Builder();
         searchBuilder.index(EsIndexAlias.SANO_WALLET_COIN_RECORD);
         BoolQuery.Builder boolBuilder = new BoolQuery.Builder();
 
         // 固定查询用户ID，ES字段使用下划线命名。
-        boolBuilder.must(TermQuery.of(t -> t.field("user_id").value(userId))._toQuery());
+        if (userId != null) {
+            boolBuilder.must(TermQuery.of(t -> t.field("user_id").value(userId))._toQuery());
+        }
+        // 可选查询业务类型，ES字段使用下划线命名。
+        if (businessType != null) {
+            boolBuilder.must(TermQuery.of(t -> t.field("business_type").value(businessType))._toQuery());
+        }
         // 时间段
         EsSearchUtil.setDateEQ(boolBuilder, "create_time", DATE_FORMAT, startTime, endTime);
         searchBuilder.query(boolBuilder.build()._toQuery());

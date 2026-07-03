@@ -14,6 +14,11 @@ public class AppCoinRecordDTO {
     private Long userId;
 
     /**
+     * 业务类型
+     */
+    private Long businessType;
+
+    /**
      * 开始时间，格式：yyyy-MM-dd HH:mm:ss。
      */
     private String startTime;
