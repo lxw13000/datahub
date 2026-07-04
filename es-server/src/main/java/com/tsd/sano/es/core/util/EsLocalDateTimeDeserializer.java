@@ -1,4 +1,4 @@
-package com.tsd.sano.es.controller.sta.vo;
+package com.tsd.sano.es.core.util;
 
 import com.fasterxml.jackson.core.JsonParser;
 import com.fasterxml.jackson.databind.DeserializationContext;

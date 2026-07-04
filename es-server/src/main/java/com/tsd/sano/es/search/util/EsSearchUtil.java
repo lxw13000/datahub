@@ -53,6 +53,22 @@ public class EsSearchUtil {
         )._toQuery();
     }
 
+    /**
+     * 查询一个字段是否等于匹配(term)单个值
+     *
+     * @param field field, 字段分词，则需要加上.keyword再传入，示例”title.keyword“
+     * @param value value
+     * @return co.elastic.clients.elasticsearch._types.query_dsl.Query
+     * @author lxw
+     * @date 2024/11/11 14:03
+     **/
+    public static <T> Query getTerm(String field, T value) {
+        return TermQuery.of(t -> t
+                .field(field)
+                .value(FieldValue.of(value))
+        )._toQuery();
+
+    }
 
     /**
      * 多个字段模糊匹配同一个值
@@ -267,6 +283,20 @@ public class EsSearchUtil {
         searchBuilder.trackTotalHits(t -> t.enabled(true));
     }
 
+    /**
+     * 设置排序
+     *
+     * @param searchBuilder 查询对象
+     * @param field         排序字段
+     * @param asc           正序SortOrder.Asc，反序SortOrder.Desc
+     * @author lxw
+     * @date 2023/2/16 9:57
+     **/
+    public static void setOrder(SearchRequest.Builder searchBuilder, String field, SortOrder asc) {
+        if (isNotBlank(field)) {
+            searchBuilder.sort(s -> s.field(f -> f.field(field).order(asc)));
+        }
+    }
 
     /**
      * 设置排序

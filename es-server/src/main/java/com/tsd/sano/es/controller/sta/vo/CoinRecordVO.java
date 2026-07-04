@@ -3,6 +3,8 @@ package com.tsd.sano.es.controller.sta.vo;
 import com.fasterxml.jackson.annotation.JsonAlias;
 import com.fasterxml.jackson.databind.annotation.JsonDeserialize;
 import com.fasterxml.jackson.databind.annotation.JsonSerialize;
+import com.tsd.sano.es.core.util.EsLocalDateTimeDeserializer;
+import com.tsd.sano.es.core.util.SpaceLocalDateTimeSerializer;
 import lombok.Data;
 
 import java.time.LocalDateTime;
