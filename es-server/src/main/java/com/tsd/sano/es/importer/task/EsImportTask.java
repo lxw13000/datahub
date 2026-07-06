@@ -1,5 +1,6 @@
 package com.tsd.sano.es.importer.task;
 
+import com.tsd.sano.es.importer.notify.ImportNotifyService;
 import com.tsd.sano.es.importer.pipeline.EsImportService;
 import com.tsd.sano.es.importer.pipeline.config.EsImportProperties;
 import com.tsd.sano.es.importer.pipeline.model.EsImportConfig;
@@ -46,6 +47,7 @@ public class EsImportTask {
     private final EsImportProperties properties;
     private final EsImportService importService;
     private final SanoImportTaskService importTaskService;
+    private final ImportNotifyService importNotifyService;
     private final Executor esImportExecutor;
 
     /**
@@ -54,10 +56,12 @@ public class EsImportTask {
     public EsImportTask(EsImportProperties properties,
                         EsImportService importService,
                         SanoImportTaskService importTaskService,
+                        ImportNotifyService importNotifyService,
                         @Qualifier("esImportExecutor") Executor esImportExecutor) {
         this.properties = properties;
         this.importService = importService;
         this.importTaskService = importTaskService;
+        this.importNotifyService = importNotifyService;
         this.esImportExecutor = esImportExecutor;
     }
 
@@ -209,6 +213,7 @@ public class EsImportTask {
      */
     private void executeTask(SanoImportTask task, long deadlineMillis) {
         boolean resumeTask = StringUtils.equals(task.getStatus(), SanoImportTaskStatus.TIMEOUT_PARTIAL.name());
+        ImportStatistics statistics = null;
         try {
             task.setStatus(SanoImportTaskStatus.RUNNING.name());
             task.setRunCount(task.getRunCount() + 1);
@@ -217,7 +222,7 @@ public class EsImportTask {
             task.setLastError(null);
             importTaskService.updateTask(task);
 
-            ImportStatistics statistics = importService.importData(toImportConfig(task, resumeTask), deadlineMillis, resumeTask);
+            statistics = importService.importData(toImportConfig(task, resumeTask), deadlineMillis, resumeTask);
 
             if (statistics.isTimeoutPartial()) {
                 task.setStatus(SanoImportTaskStatus.TIMEOUT_PARTIAL.name());
@@ -227,6 +232,7 @@ public class EsImportTask {
                 task.setLastSuccessId(statistics.getLastSuccessId());
                 task.setFinishedAt(LocalDateTime.now());
                 importTaskService.updateTask(task);
+                importNotifyService.notifyTimeoutPartial(task, statistics);
                 return;
             }
 
@@ -237,11 +243,13 @@ public class EsImportTask {
             task.setLastSuccessId(statistics.getLastSuccessId());
             task.setFinishedAt(LocalDateTime.now());
             importTaskService.updateTask(task);
+            importNotifyService.notifySuccess(task, statistics);
         } catch (Exception e) {
             task.setStatus(SanoImportTaskStatus.FAILED.name());
             task.setLastError(StringUtils.left(e.getMessage(), 1000));
             task.setFinishedAt(LocalDateTime.now());
             importTaskService.updateTask(task);
+            importNotifyService.notifyFailed(task, statistics, e);
 
             // 当前任务失败后继续执行后续任务，避免单表异常阻塞整个调度批次。
             log.error("===> ES-Import pending task failed. taskId={}, alias={}, table={}, date={}, error={}",

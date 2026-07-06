@@ -102,6 +102,11 @@ public class EsImportProperties {
      */
     private List<TableConfig> tables = new ArrayList<>();
 
+    /**
+     * 导入任务结束通知配置，支持按任务结果分别开关。
+     */
+    private NotifyConfig notify = new NotifyConfig();
+
     //============== getter/setter ===================
 
     public int getReadBatchSize() {
@@ -238,6 +243,175 @@ public class EsImportProperties {
 
     public void setTables(List<TableConfig> tables) {
         this.tables = tables;
+    }
+
+    public NotifyConfig getNotify() {
+        return notify;
+    }
+
+    public void setNotify(NotifyConfig notify) {
+        this.notify = notify;
+    }
+
+    /**
+     * 导入任务通知配置。
+     */
+    public static class NotifyConfig {
+
+        /**
+         * 通知总开关，关闭后所有渠道都不发送。
+         */
+        private boolean enabled = false;
+
+        /**
+         * 是否发送成功任务通知。
+         */
+        private boolean successEnabled = true;
+
+        /**
+         * 是否发送失败任务通知。
+         */
+        private boolean failureEnabled = true;
+
+        /**
+         * 是否发送超时暂停任务通知。
+         */
+        private boolean timeoutEnabled = true;
+
+        /**
+         * 通知标题前缀，便于在IM中识别来源。
+         */
+        private String subjectPrefix = "[SANO-ES]";
+
+        /**
+         * 通知渠道配置。
+         */
+        private NotifyChannels channels = new NotifyChannels();
+
+        public boolean isEnabled() {
+            return enabled;
+        }
+
+        public void setEnabled(boolean enabled) {
+            this.enabled = enabled;
+        }
+
+        public boolean isSuccessEnabled() {
+            return successEnabled;
+        }
+
+        public void setSuccessEnabled(boolean successEnabled) {
+            this.successEnabled = successEnabled;
+        }
+
+        public boolean isFailureEnabled() {
+            return failureEnabled;
+        }
+
+        public void setFailureEnabled(boolean failureEnabled) {
+            this.failureEnabled = failureEnabled;
+        }
+
+        public boolean isTimeoutEnabled() {
+            return timeoutEnabled;
+        }
+
+        public void setTimeoutEnabled(boolean timeoutEnabled) {
+            this.timeoutEnabled = timeoutEnabled;
+        }
+
+        public String getSubjectPrefix() {
+            return subjectPrefix;
+        }
+
+        public void setSubjectPrefix(String subjectPrefix) {
+            this.subjectPrefix = subjectPrefix;
+        }
+
+        public NotifyChannels getChannels() {
+            return channels;
+        }
+
+        public void setChannels(NotifyChannels channels) {
+            this.channels = channels;
+        }
+    }
+
+    /**
+     * webhook通知渠道集合。
+     */
+    public static class NotifyChannels {
+
+        /**
+         * 飞书/Lark机器人配置。
+         */
+        private NotifyChannelConfig lark = new NotifyChannelConfig();
+
+        /**
+         * 钉钉机器人配置。
+         */
+        private NotifyChannelConfig dingtalk = new NotifyChannelConfig();
+
+        public NotifyChannelConfig getLark() {
+            return lark;
+        }
+
+        public void setLark(NotifyChannelConfig lark) {
+            this.lark = lark;
+        }
+
+        public NotifyChannelConfig getDingtalk() {
+            return dingtalk;
+        }
+
+        public void setDingtalk(NotifyChannelConfig dingtalk) {
+            this.dingtalk = dingtalk;
+        }
+    }
+
+    /**
+     * 单个webhook渠道配置。
+     */
+    public static class NotifyChannelConfig {
+
+        /**
+         * 当前渠道开关。
+         */
+        private boolean enabled = false;
+
+        /**
+         * 机器人webhook地址。
+         */
+        private String webhookUrl;
+
+        /**
+         * 机器人签名密钥，未配置时按无签名机器人发送。
+         */
+        private String secret;
+
+        public boolean isEnabled() {
+            return enabled;
+        }
+
+        public void setEnabled(boolean enabled) {
+            this.enabled = enabled;
+        }
+
+        public String getWebhookUrl() {
+            return webhookUrl;
+        }
+
+        public void setWebhookUrl(String webhookUrl) {
+            this.webhookUrl = webhookUrl;
+        }
+
+        public String getSecret() {
+            return secret;
+        }
+
+        public void setSecret(String secret) {
+            this.secret = secret;
+        }
     }
 
     /**

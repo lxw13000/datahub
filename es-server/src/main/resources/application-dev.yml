@@ -47,8 +47,8 @@ sano:
     total-size-cap: 2GB
     async-queue-size: 2048
   es:
-#    uris: ${ES_URIS:127.0.0.1:9201}
-    uris: ${ES_URIS:tools-es.fofunlive.net}
+    uris: ${ES_URIS:127.0.0.1:9201}
+#    uris: ${ES_URIS:tools-es.fofunlive.net}
     username: ${ES_USERNAME:elastic}
     password: ${ES_PASSWORD:es2peter}
     socket-timeout: 600000
@@ -92,6 +92,33 @@ sano:
       disable-refresh: true
       # 导入期间是否关闭副本
       disable-replica: true
+
+      notify:
+        # 导入任务结束通知总开关，开发环境默认关闭，避免本地调试误发。
+        enabled: ${IMPORT_NOTIFY_ENABLED:true}
+        # 是否发送成功任务通知。
+        success-enabled: true
+        # 是否发送失败任务通知。
+        failure-enabled: true
+        # 是否发送超时暂停任务通知。
+        timeout-enabled: true
+        # 通知标题前缀，便于在IM中识别来源。
+        subject-prefix: "[SANO-ES-DEV]"
+        channels:
+          lark:
+            # 飞书/Lark机器人开关。
+            enabled: ${LARK_NOTIFY_ENABLED:true}
+            # 飞书/Lark机器人webhook地址。
+            webhook-url: ${LARK_WEBHOOK_URL:https://open.larksuite.com/open-apis/bot/v2/hook/c1af0ddb-8ba5-4dae-a0e2-ecc476bcc5fd}
+            # 飞书/Lark机器人签名密钥，未开启签名时留空。
+            secret: ${LARK_WEBHOOK_SECRET:6MKCorKya6KxX99qxqaKwh}
+          dingtalk:
+            # 钉钉机器人开关。
+            enabled: ${DINGTALK_NOTIFY_ENABLED:false}
+            # 钉钉机器人webhook地址。
+            webhook-url: ${DINGTALK_WEBHOOK_URL:}
+            # 钉钉机器人签名密钥，未开启签名时留空。
+            secret: ${DINGTALK_WEBHOOK_SECRET:}
 
       tables:
         - enabled: true
