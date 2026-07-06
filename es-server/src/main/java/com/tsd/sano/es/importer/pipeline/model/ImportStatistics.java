@@ -1,98 +1,81 @@
 package com.tsd.sano.es.importer.pipeline.model;
 
+import lombok.Getter;
+import lombok.Setter;
+
 import java.util.concurrent.atomic.AtomicLong;
 
 /**
- * 导入统计
- * <p>
- * 全局共享
+ * ES导入统计信息。
+ *
+ * <p>多个Reader/Bulk阶段共享该对象，计数字段使用AtomicLong保证并发更新安全。</p>
  *
  * @author lxw
  */
+@Getter
+@Setter
 public class ImportStatistics {
 
     /**
-     * 总数量
+     * 源端总数据量。
      */
     private final AtomicLong total = new AtomicLong();
 
     /**
-     * 已读取
+     * 已读取数据量。
      */
     private final AtomicLong read = new AtomicLong();
 
     /**
-     * 已导入
+     * 已成功写入ES的数据量。
      */
     private final AtomicLong success = new AtomicLong();
 
     /**
-     * 导入失败
+     * 写入ES失败的数据量。
      */
     private final AtomicLong failed = new AtomicLong();
 
     /**
-     * 当前Bulk次数
+     * 当前Bulk执行次数。
      */
     private final AtomicLong bulkCount = new AtomicLong();
 
     /**
-     * 当前最后ID
+     * 当前读取到的最后一条MySQL ID。
      */
     private volatile long lastId;
 
     /**
-     * 已确认成功写入ES的最大ID
+     * 已确认成功写入ES的最大MySQL ID。
      */
     private final AtomicLong lastSuccessId = new AtomicLong();
 
     /**
-     * 开始时间
+     * 导入开始时间戳。
      */
     private volatile long startTime;
 
     /**
-     * 结束时间
+     * 导入结束时间戳。
      */
     private volatile long endTime;
 
     /**
-     * 是否因为到达deadline而暂停
+     * 是否因为到达deadline而暂停。
      */
     private volatile boolean timeoutPartial;
 
-    public AtomicLong getTotal() {
-        return total;
-    }
-
-    public AtomicLong getRead() {
-        return read;
-    }
-
-    public AtomicLong getSuccess() {
-        return success;
-    }
-
-    public AtomicLong getFailed() {
-        return failed;
-    }
-
-    public AtomicLong getBulkCount() {
-        return bulkCount;
-    }
-
-    public long getLastId() {
-        return lastId;
-    }
-
-    public void setLastId(long lastId) {
-        this.lastId = lastId;
-    }
-
+    /**
+     * 获取已确认成功写入ES的最大MySQL ID。
+     */
     public long getLastSuccessId() {
         return lastSuccessId.get();
     }
 
+    /**
+     * 设置已确认成功写入ES的最大MySQL ID。
+     */
     public void setLastSuccessId(long value) {
         lastSuccessId.set(value);
     }
@@ -102,29 +85,5 @@ public class ImportStatistics {
      */
     public void updateLastSuccessId(long value) {
         lastSuccessId.accumulateAndGet(value, Math::max);
-    }
-
-    public long getStartTime() {
-        return startTime;
-    }
-
-    public void setStartTime(long startTime) {
-        this.startTime = startTime;
-    }
-
-    public long getEndTime() {
-        return endTime;
-    }
-
-    public void setEndTime(long endTime) {
-        this.endTime = endTime;
-    }
-
-    public boolean isTimeoutPartial() {
-        return timeoutPartial;
-    }
-
-    public void setTimeoutPartial(boolean timeoutPartial) {
-        this.timeoutPartial = timeoutPartial;
     }
 }

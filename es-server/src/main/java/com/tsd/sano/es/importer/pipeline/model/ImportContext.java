@@ -1,7 +1,7 @@
 package com.tsd.sano.es.importer.pipeline.model;
 
-
 import com.tsd.sano.es.importer.pipeline.config.EsImportProperties;
+import lombok.Getter;
 
 import java.util.List;
 import java.util.Map;
@@ -11,37 +11,34 @@ import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicReference;
 
 /**
- * 导入上下文
- * <p>
- * 生命周期：
- * <p>
- * 创建Index ——> Reader ——> Queue ——> Bulk ——> Alias
- * <p>
- * 全流程共享
+ * ES导入上下文。
+ *
+ * <p>生命周期：创建Index -> Reader -> Queue -> Bulk -> Alias，全流程共享。</p>
  *
  * @author lxw
  */
+@Getter
 public class ImportContext {
 
     /**
-     * 导入配置
+     * 导入配置。
      */
-    private EsImportConfig config;
+    private final EsImportConfig config;
 
     /**
-     * 全局统计
+     * 全局统计。
      */
-    private ImportStatistics statistics;
+    private final ImportStatistics statistics;
 
     /**
-     * 系统配置
+     * 系统导入配置。
      */
-    private EsImportProperties properties;
+    private final EsImportProperties properties;
 
     /**
-     * Reader -> Bulk
+     * Reader到Bulk之间的数据队列。
      */
-    private BlockingQueue<List<Map<String, Object>>> queue;
+    private final BlockingQueue<List<Map<String, Object>>> queue;
 
     /**
      * 导入中止标记。
@@ -76,31 +73,11 @@ public class ImportContext {
                          ImportStatistics statistics,
                          EsImportProperties properties,
                          long deadlineMillis) {
-
         this.config = config;
         this.statistics = statistics;
         this.properties = properties;
         this.deadlineMillis = deadlineMillis;
-
-        this.queue = new LinkedBlockingQueue<>(
-                properties.getQueueCapacity()
-        );
-    }
-
-    public EsImportConfig getConfig() {
-        return config;
-    }
-
-    public ImportStatistics getStatistics() {
-        return statistics;
-    }
-
-    public EsImportProperties getProperties() {
-        return properties;
-    }
-
-    public BlockingQueue<List<Map<String, Object>>> getQueue() {
-        return queue;
+        this.queue = new LinkedBlockingQueue<>(properties.getQueueCapacity());
     }
 
     /**
@@ -111,20 +88,22 @@ public class ImportContext {
         abortReason.compareAndSet(null, error);
     }
 
+    /**
+     * 判断导入是否已被标记中止。
+     */
     public boolean isAborted() {
         return aborted.get();
     }
 
+    /**
+     * 获取导入中止原因。
+     */
     public Throwable getAbortReason() {
         return abortReason.get();
     }
 
-    public long getDeadlineMillis() {
-        return deadlineMillis;
-    }
-
     /**
-     * 判断本次导入是否已到达deadline。
+     * 判断本次导入是否已经到达deadline。
      */
     public boolean isDeadlineReached() {
         return deadlineMillis > 0L && System.currentTimeMillis() >= deadlineMillis;

@@ -3,6 +3,8 @@ package com.tsd.sano.es.importer.taskstore.model;
 import com.fasterxml.jackson.annotation.JsonFormat;
 import com.fasterxml.jackson.annotation.JsonIgnore;
 import com.fasterxml.jackson.annotation.JsonProperty;
+import lombok.Getter;
+import lombok.Setter;
 
 import java.time.LocalDateTime;
 
@@ -13,6 +15,8 @@ import java.time.LocalDateTime;
  *
  * @author lxw
  */
+@Getter
+@Setter
 public class SanoImportTask {
 
     /**
@@ -64,13 +68,13 @@ public class SanoImportTask {
     private long totalCount;
 
     /**
-     * 已成功写入ES的数量。
+     * 已成功写入ES的数据量。
      */
     @JsonProperty("success_count")
     private long successCount;
 
     /**
-     * 写入失败数量。
+     * 写入失败数据量。
      */
     @JsonProperty("failed_count")
     private long failedCount;
@@ -114,134 +118,6 @@ public class SanoImportTask {
     @JsonProperty("updated_at")
     @JsonFormat(pattern = "yyyy-MM-dd'T'HH:mm:ss")
     private LocalDateTime updatedAt;
-
-    public String getTaskId() {
-        return taskId;
-    }
-
-    public void setTaskId(String taskId) {
-        this.taskId = taskId;
-    }
-
-    public String getTableName() {
-        return tableName;
-    }
-
-    public void setTableName(String tableName) {
-        this.tableName = tableName;
-    }
-
-    public String getIndexAlias() {
-        return indexAlias;
-    }
-
-    public void setIndexAlias(String indexAlias) {
-        this.indexAlias = indexAlias;
-    }
-
-    public String getIndexName() {
-        return indexName;
-    }
-
-    public void setIndexName(String indexName) {
-        this.indexName = indexName;
-    }
-
-    public String getImportDate() {
-        return importDate;
-    }
-
-    public void setImportDate(String importDate) {
-        this.importDate = importDate;
-    }
-
-    public String getStatus() {
-        return status;
-    }
-
-    public void setStatus(String status) {
-        this.status = status;
-    }
-
-    public long getLastSuccessId() {
-        return lastSuccessId;
-    }
-
-    public void setLastSuccessId(long lastSuccessId) {
-        this.lastSuccessId = lastSuccessId;
-    }
-
-    public long getTotalCount() {
-        return totalCount;
-    }
-
-    public void setTotalCount(long totalCount) {
-        this.totalCount = totalCount;
-    }
-
-    public long getSuccessCount() {
-        return successCount;
-    }
-
-    public void setSuccessCount(long successCount) {
-        this.successCount = successCount;
-    }
-
-    public long getFailedCount() {
-        return failedCount;
-    }
-
-    public void setFailedCount(long failedCount) {
-        this.failedCount = failedCount;
-    }
-
-    public int getRunCount() {
-        return runCount;
-    }
-
-    public void setRunCount(int runCount) {
-        this.runCount = runCount;
-    }
-
-    public String getLastError() {
-        return lastError;
-    }
-
-    public void setLastError(String lastError) {
-        this.lastError = lastError;
-    }
-
-    public LocalDateTime getStartedAt() {
-        return startedAt;
-    }
-
-    public void setStartedAt(LocalDateTime startedAt) {
-        this.startedAt = startedAt;
-    }
-
-    public LocalDateTime getFinishedAt() {
-        return finishedAt;
-    }
-
-    public void setFinishedAt(LocalDateTime finishedAt) {
-        this.finishedAt = finishedAt;
-    }
-
-    public LocalDateTime getCreatedAt() {
-        return createdAt;
-    }
-
-    public void setCreatedAt(LocalDateTime createdAt) {
-        this.createdAt = createdAt;
-    }
-
-    public LocalDateTime getUpdatedAt() {
-        return updatedAt;
-    }
-
-    public void setUpdatedAt(LocalDateTime updatedAt) {
-        this.updatedAt = updatedAt;
-    }
 
     /**
      * 构建任务文档ID。

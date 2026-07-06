@@ -1,5 +1,8 @@
 package com.tsd.sano.es.importer.notify;
 
+import lombok.AllArgsConstructor;
+import lombok.Getter;
+
 /**
  * 导入任务通知消息。
  *
@@ -7,6 +10,8 @@ package com.tsd.sano.es.importer.notify;
  *
  * @author lxw
  */
+@Getter
+@AllArgsConstructor
 public class ImportNotifyMessage {
 
     /**
@@ -23,22 +28,4 @@ public class ImportNotifyMessage {
      * 通知正文，使用纯文本便于兼容不同webhook渠道。
      */
     private final String content;
-
-    public ImportNotifyMessage(String eventType, String title, String content) {
-        this.eventType = eventType;
-        this.title = title;
-        this.content = content;
-    }
-
-    public String getEventType() {
-        return eventType;
-    }
-
-    public String getTitle() {
-        return title;
-    }
-
-    public String getContent() {
-        return content;
-    }
 }

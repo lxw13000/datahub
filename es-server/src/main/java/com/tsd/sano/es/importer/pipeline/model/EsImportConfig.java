@@ -1,156 +1,73 @@
 package com.tsd.sano.es.importer.pipeline.model;
 
+import lombok.Getter;
+import lombok.Setter;
+
 import java.time.LocalDate;
 
 /**
- * 一次导入任务配置
- * <p>
- * 一个对象代表一个业务表
+ * 单次ES导入任务配置。
+ *
+ * <p>一个对象代表一张业务表在某一天的导入参数。</p>
  *
  * @author lxw
  */
+@Getter
+@Setter
 public class EsImportConfig {
 
     /**
-     * Alias
+     * ES业务alias。
      */
     private String indexAlias;
 
     /**
-     * 实际Index
+     * 本次写入的真实ES索引名。
      */
     private String indexName;
 
     /**
-     * Mapping文件
+     * resources/esmapping目录下的mapping文件名。
      */
     private String mappingFile;
 
     /**
-     * 数据表
+     * MySQL源表名。
      */
     private String tableName;
 
     /**
-     * 导入日期
+     * 导入业务日期。
      */
     private LocalDate importDate;
 
     /**
-     * SQL条件
+     * 可选SQL条件；为空时按dtColumn = importDate过滤。
      */
     private String whereSql;
 
     /**
-     * 主键字段，用于游标分页和ES文档ID
+     * 主键字段，用于游标分页和ES文档ID。
      */
     private String idColumn = "id";
 
     /**
-     * 分区日期字段，whereSql为空时默认按该字段做T+1过滤
+     * 分区日期字段，whereSql为空时默认按该字段做T+1过滤。
      */
     private String dtColumn = "dt";
 
     /**
-     * 起始游标ID，用于断点续跑时从 last_success_id 后继续读取
+     * 起始游标ID，续跑时从last_success_id之后继续读取。
      */
     private long startId;
 
     /**
-     * 导入完成是否删除该表历史索引
+     * 导入完成是否删除该表历史索引。
      */
     private boolean deleteHistoryIndex;
 
     /**
-     * 该表历史索引保留天数
+     * 该表历史索引保留天数。
      */
     private int reserveDays = 30;
-
-    public String getIndexAlias() {
-        return indexAlias;
-    }
-
-    public void setIndexAlias(String indexAlias) {
-        this.indexAlias = indexAlias;
-    }
-
-    public String getIndexName() {
-        return indexName;
-    }
-
-    public void setIndexName(String indexName) {
-        this.indexName = indexName;
-    }
-
-    public String getMappingFile() {
-        return mappingFile;
-    }
-
-    public void setMappingFile(String mappingFile) {
-        this.mappingFile = mappingFile;
-    }
-
-    public String getTableName() {
-        return tableName;
-    }
-
-    public void setTableName(String tableName) {
-        this.tableName = tableName;
-    }
-
-    public LocalDate getImportDate() {
-        return importDate;
-    }
-
-    public void setImportDate(LocalDate importDate) {
-        this.importDate = importDate;
-    }
-
-    public String getWhereSql() {
-        return whereSql;
-    }
-
-    public void setWhereSql(String whereSql) {
-        this.whereSql = whereSql;
-    }
-
-    public String getIdColumn() {
-        return idColumn;
-    }
-
-    public void setIdColumn(String idColumn) {
-        this.idColumn = idColumn;
-    }
-
-    public String getDtColumn() {
-        return dtColumn;
-    }
-
-    public void setDtColumn(String dtColumn) {
-        this.dtColumn = dtColumn;
-    }
-
-    public long getStartId() {
-        return startId;
-    }
-
-    public void setStartId(long startId) {
-        this.startId = startId;
-    }
-
-    public boolean isDeleteHistoryIndex() {
-        return deleteHistoryIndex;
-    }
-
-    public void setDeleteHistoryIndex(boolean deleteHistoryIndex) {
-        this.deleteHistoryIndex = deleteHistoryIndex;
-    }
-
-    public int getReserveDays() {
-        return reserveDays;
-    }
-
-    public void setReserveDays(int reserveDays) {
-        this.reserveDays = reserveDays;
-    }
 }
