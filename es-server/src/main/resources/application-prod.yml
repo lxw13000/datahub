@@ -94,7 +94,7 @@ sano:
 
       notify:
         # 导入任务结束通知总开关，生产环境建议通过环境变量显式开启。
-        enabled: ${IMPORT_NOTIFY_ENABLED:false}
+        enabled: ${IMPORT_NOTIFY_ENABLED:true}
         # 是否发送成功任务通知。
         success-enabled: true
         # 是否发送失败任务通知。
@@ -106,7 +106,7 @@ sano:
         channels:
           lark:
             # 飞书/Lark机器人开关。
-            enabled: ${LARK_NOTIFY_ENABLED:false}
+            enabled: ${LARK_NOTIFY_ENABLED:true}
             # 飞书/Lark机器人webhook地址。
             webhook-url: ${LARK_WEBHOOK_URL:https://open.larksuite.com/open-apis/bot/v2/hook/b99cf729-136e-40e6-90b7-0ec5e8c61ebb}
             # 飞书/Lark机器人签名密钥，未开启签名时留空。
