@@ -17,6 +17,10 @@ import lombok.extern.slf4j.Slf4j;
 import org.apache.commons.lang3.StringUtils;
 import org.springframework.util.CollectionUtils;
 
+import java.time.LocalDate;
+import java.time.LocalDateTime;
+import java.time.format.DateTimeFormatter;
+import java.time.format.DateTimeParseException;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
@@ -31,6 +35,60 @@ import java.util.Map;
  **/
 @Slf4j
 public class EsSearchUtil {
+
+
+    /**
+     * 查询接口时间格式，和接口入参startTime/endTime保持一致。
+     */
+    private static final DateTimeFormatter QUERY_TIME_FORMATTER = DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss");
+
+    /**
+     * 按天物理索引后缀格式，例如sano_wallet_coin_record_20260701。
+     */
+    private static final DateTimeFormatter INDEX_DATE_FORMATTER = DateTimeFormatter.BASIC_ISO_DATE;
+
+    /**
+     * 根据查询时间范围设置ES查询索引。
+     *
+     * <p>如果起止时间完整且格式为yyyy-MM-dd HH:mm:ss，则按天生成物理索引名，减少无关历史索引参与查询；
+     * 如果时间缺失或格式异常，则回退到alias，保证查询仍可执行。</p>
+     *
+     * @param searchBuilder ES查询构造器
+     * @param indexAlias    业务alias，也是物理索引名前缀
+     * @param startTime     开始时间，格式yyyy-MM-dd HH:mm:ss
+     * @param endTime       结束时间，格式yyyy-MM-dd HH:mm:ss
+     */
+    public static void setDateRangeIndices(SearchRequest.Builder searchBuilder, String indexAlias, String startTime, String endTime) {
+        if (StringUtils.isBlank(startTime) || StringUtils.isBlank(endTime)) {
+            // 时间范围不完整时无法准确推导物理索引，使用alias兜底。
+            searchBuilder.index(indexAlias);
+            return;
+        }
+
+        try {
+            LocalDate startDate = LocalDateTime.parse(startTime, QUERY_TIME_FORMATTER).toLocalDate();
+            LocalDate endDate = LocalDateTime.parse(endTime, QUERY_TIME_FORMATTER).toLocalDate();
+            if (endDate.isBefore(startDate)) {
+                // 调用方时间倒挂时不在索引选择层抛错，回退alias交给原有时间条件处理。
+                searchBuilder.index(indexAlias);
+                return;
+            }
+
+            List<String> indices = new ArrayList<>();
+            for (LocalDate date = startDate; !date.isAfter(endDate); date = date.plusDays(1)) {
+                indices.add(indexAlias + "_" + INDEX_DATE_FORMATTER.format(date));
+            }
+
+            // 某天无数据时可能没有物理索引，忽略不存在索引可以避免整个查询失败。
+            searchBuilder.index(indices);
+            searchBuilder.ignoreUnavailable(true);
+        } catch (DateTimeParseException e) {
+            // 时间格式不符合接口约定时回退alias，避免索引优化逻辑影响原查询兼容性。
+            searchBuilder.index(indexAlias);
+            log.warn("===> ES-Search use alias because time format invalid. alias={}, startTime={}, endTime={}",
+                    indexAlias, startTime, endTime);
+        }
+    }
 
     /**
      * 查询一个字段是否等于匹配(term)多个值中的任意一个

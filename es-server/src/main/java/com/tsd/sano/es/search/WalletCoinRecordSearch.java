@@ -9,9 +9,9 @@ import co.elastic.clients.elasticsearch._types.query_dsl.BoolQuery;
 import co.elastic.clients.elasticsearch.core.SearchRequest;
 import co.elastic.clients.elasticsearch.core.SearchResponse;
 import co.elastic.clients.elasticsearch.core.search.Hit;
-import com.tsd.sano.es.core.util.TimeUtils;
 import com.tsd.sano.es.controller.sta.vo.CoinRecordVO;
 import com.tsd.sano.es.controller.sta.vo.WeekStatVO;
+import com.tsd.sano.es.core.util.TimeUtils;
 import com.tsd.sano.es.search.util.EsSearchUtil;
 import org.apache.commons.lang3.StringUtils;
 import org.slf4j.Logger;
@@ -34,6 +34,7 @@ import java.util.Map;
 public class WalletCoinRecordSearch {
 
     private static final Logger log = LoggerFactory.getLogger(WalletCoinRecordSearch.class);
+
     private final ElasticsearchClient client;
 
     public WalletCoinRecordSearch(ElasticsearchClient client) {
@@ -51,7 +52,7 @@ public class WalletCoinRecordSearch {
     public WeekStatVO staWeek(List<Integer> roomIds, String startTime, String endTime) {
 
         SearchRequest.Builder searchBuilder = new SearchRequest.Builder();
-        searchBuilder.index(EsIndexAlias.SANO_WALLET_COIN_RECORD);
+        EsSearchUtil.setDateRangeIndices(searchBuilder, EsIndexAlias.SANO_WALLET_COIN_RECORD, startTime, endTime);
         BoolQuery.Builder boolBuilder = new BoolQuery.Builder();
 
         // 房间集合
@@ -115,7 +116,7 @@ public class WalletCoinRecordSearch {
                                                 String lastCreateTime, Long lastId) {
         long totalStartMillis = System.currentTimeMillis();
         SearchRequest.Builder searchBuilder = new SearchRequest.Builder();
-        searchBuilder.index(EsIndexAlias.SANO_WALLET_COIN_RECORD);
+        EsSearchUtil.setDateRangeIndices(searchBuilder, EsIndexAlias.SANO_WALLET_COIN_RECORD, startTime, endTime);
         BoolQuery.Builder boolBuilder = new BoolQuery.Builder();
 
         // 固定查询用户ID，ES字段使用下划线命名。
@@ -141,7 +142,8 @@ public class WalletCoinRecordSearch {
 
         try {
             long searchStartMillis = System.currentTimeMillis();
-            SearchResponse<CoinRecordVO> response = client.search(searchBuilder.build(), CoinRecordVO.class);
+            SearchRequest build = searchBuilder.build();
+            SearchResponse<CoinRecordVO> response = client.search(build, CoinRecordVO.class);
             long searchCostMs = System.currentTimeMillis() - searchStartMillis;
 
             long parseStartMillis = System.currentTimeMillis();
@@ -157,6 +159,7 @@ public class WalletCoinRecordSearch {
             log.info("===> ES-Search coin records. userId={}, businessType={}, startTime={}, endTime={}, pageSize={}, lastCreateTime={}, lastId={}, size={}, buildCostMs={}, searchCostMs={}, parseCostMs={}, totalCostMs={}",
                     userId, businessType, startTime, endTime, pageSize, lastCreateTime, lastId, records.size(),
                     buildCostMs, searchCostMs, parseCostMs, totalCostMs);
+            log.info("===> 聚类查询DSL:{}", build);
             return records;
         } catch (IOException | ElasticsearchException e) {
             log.error("ES search coin records failed, userId={}, businessType={}, startTime={}, endTime={}, pageSize={}, lastCreateTime={}, lastId={}, buildCostMs={}, totalCostMs={}, error={}",
