@@ -2,6 +2,7 @@ package com.tsd.sano.es.controller.sta;
 
 import com.tsd.sano.es.controller.sta.dto.AppCoinRecordDTO;
 import com.tsd.sano.es.controller.sta.dto.SatCoinWeekDTO;
+import com.tsd.sano.es.controller.sta.dto.SearchCoinRecordDTO;
 import com.tsd.sano.es.controller.sta.vo.CoinRecordVO;
 import com.tsd.sano.es.controller.sta.vo.WeekStatVO;
 import com.tsd.sano.es.core.result.ResultVO;
@@ -53,11 +54,35 @@ public class WalletCoinController {
      */
     @PostMapping("/searchCoinRecords")
     public ResultVO<List<CoinRecordVO>> searchCoinRecords(@RequestBody AppCoinRecordDTO recordDTO) {
-        List<CoinRecordVO> coinRecordVOS = walletCoinRecordSearch.searchCoinRecords(
-                recordDTO.getUserId(), recordDTO.getBusinessType()
-                , recordDTO.getStartTime(), recordDTO.getEndTime(), recordDTO.getPageSize()
-                , recordDTO.getLastCreateTime(), recordDTO.getLastId()
-        );
+
+        SearchCoinRecordDTO dto = new SearchCoinRecordDTO();
+        dto.setSearchType(0);
+        dto.setUserId(recordDTO.getUserId());
+        dto.setBusinessType(recordDTO.getBusinessType());
+        dto.setStartTime(recordDTO.getStartTime());
+        dto.setEndTime(recordDTO.getEndTime());
+        dto.setPageSize(recordDTO.getPageSize());
+        dto.setLastCreateTime(recordDTO.getLastCreateTime());
+        dto.setLastId(recordDTO.getLastId());
+        List<CoinRecordVO> coinRecordVOS = walletCoinRecordSearch.list(dto);
+        return ResultVO.success(coinRecordVOS);
+    }
+
+    /**
+     * 查询指定用户在指定时间段内的金币流水记录总数。
+     */
+    @PostMapping("/count")
+    public ResultVO<Long> count(@RequestBody SearchCoinRecordDTO recordDTO) {
+        long count = walletCoinRecordSearch.count(recordDTO);
+        return ResultVO.success(count);
+    }
+
+    /**
+     * 查询指定用户在指定时间段内的金币流水记录列表。
+     */
+    @PostMapping("/list")
+    public ResultVO<List<CoinRecordVO>> list(@RequestBody SearchCoinRecordDTO recordDTO) {
+        List<CoinRecordVO> coinRecordVOS = walletCoinRecordSearch.list(recordDTO);
         return ResultVO.success(coinRecordVOS);
     }
 }

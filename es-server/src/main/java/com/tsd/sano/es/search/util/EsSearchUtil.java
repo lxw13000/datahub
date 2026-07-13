@@ -47,22 +47,21 @@ public class EsSearchUtil {
      */
     private static final DateTimeFormatter INDEX_DATE_FORMATTER = DateTimeFormatter.BASIC_ISO_DATE;
 
+
     /**
      * 根据查询时间范围设置ES查询索引。
      *
      * <p>如果起止时间完整且格式为yyyy-MM-dd HH:mm:ss，则按天生成物理索引名，减少无关历史索引参与查询；
      * 如果时间缺失或格式异常，则回退到alias，保证查询仍可执行。</p>
      *
-     * @param searchBuilder ES查询构造器
-     * @param indexAlias    业务alias，也是物理索引名前缀
-     * @param startTime     开始时间，格式yyyy-MM-dd HH:mm:ss
-     * @param endTime       结束时间，格式yyyy-MM-dd HH:mm:ss
+     * @param indexAlias 业务alias，也是物理索引名前缀
+     * @param startTime  开始时间，格式yyyy-MM-dd HH:mm:ss
+     * @param endTime    结束时间，格式yyyy-MM-dd HH:mm:ss
      */
-    public static void setDateRangeIndices(SearchRequest.Builder searchBuilder, String indexAlias, String startTime, String endTime) {
+    public static List<String> getIndices(String indexAlias, String startTime, String endTime) {
         if (StringUtils.isBlank(startTime) || StringUtils.isBlank(endTime)) {
             // 时间范围不完整时无法准确推导物理索引，使用alias兜底。
-            searchBuilder.index(indexAlias);
-            return;
+            return List.of(indexAlias);
         }
 
         try {
@@ -70,23 +69,19 @@ public class EsSearchUtil {
             LocalDate endDate = LocalDateTime.parse(endTime, QUERY_TIME_FORMATTER).toLocalDate();
             if (endDate.isBefore(startDate)) {
                 // 调用方时间倒挂时不在索引选择层抛错，回退alias交给原有时间条件处理。
-                searchBuilder.index(indexAlias);
-                return;
+                return List.of(indexAlias);
             }
 
             List<String> indices = new ArrayList<>();
             for (LocalDate date = startDate; !date.isAfter(endDate); date = date.plusDays(1)) {
                 indices.add(indexAlias + "_" + INDEX_DATE_FORMATTER.format(date));
             }
-
-            // 某天无数据时可能没有物理索引，忽略不存在索引可以避免整个查询失败。
-            searchBuilder.index(indices);
-            searchBuilder.ignoreUnavailable(true);
+            return indices;
         } catch (DateTimeParseException e) {
             // 时间格式不符合接口约定时回退alias，避免索引优化逻辑影响原查询兼容性。
-            searchBuilder.index(indexAlias);
             log.warn("===> ES-Search use alias because time format invalid. alias={}, startTime={}, endTime={}",
                     indexAlias, startTime, endTime);
+            return List.of(indexAlias);
         }
     }
 
@@ -120,7 +115,7 @@ public class EsSearchUtil {
      * @author lxw
      * @date 2024/11/11 14:03
      **/
-    public static <T> Query getTerm(String field, T value) {
+    public static Query getTerm(String field, Object value) {
         return TermQuery.of(t -> t
                 .field(field)
                 .value(FieldValue.of(value))

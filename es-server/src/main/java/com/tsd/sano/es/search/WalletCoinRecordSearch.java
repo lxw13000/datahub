@@ -6,9 +6,12 @@ import co.elastic.clients.elasticsearch._types.FieldValue;
 import co.elastic.clients.elasticsearch._types.SortOrder;
 import co.elastic.clients.elasticsearch._types.aggregations.Aggregate;
 import co.elastic.clients.elasticsearch._types.query_dsl.BoolQuery;
+import co.elastic.clients.elasticsearch.core.CountRequest;
+import co.elastic.clients.elasticsearch.core.CountResponse;
 import co.elastic.clients.elasticsearch.core.SearchRequest;
 import co.elastic.clients.elasticsearch.core.SearchResponse;
 import co.elastic.clients.elasticsearch.core.search.Hit;
+import com.tsd.sano.es.controller.sta.dto.SearchCoinRecordDTO;
 import com.tsd.sano.es.controller.sta.vo.CoinRecordVO;
 import com.tsd.sano.es.controller.sta.vo.WeekStatVO;
 import com.tsd.sano.es.core.util.TimeUtils;
@@ -52,7 +55,9 @@ public class WalletCoinRecordSearch {
     public WeekStatVO staWeek(List<Integer> roomIds, String startTime, String endTime) {
 
         SearchRequest.Builder searchBuilder = new SearchRequest.Builder();
-        EsSearchUtil.setDateRangeIndices(searchBuilder, EsIndexAlias.SANO_WALLET_COIN_RECORD, startTime, endTime);
+        searchBuilder.index(EsSearchUtil.getIndices(EsIndexAlias.SANO_WALLET_COIN_RECORD, startTime, endTime));
+        // 某天无数据时可能没有物理索引，忽略不存在索引可以避免整个查询失败。
+        searchBuilder.ignoreUnavailable(true);
         BoolQuery.Builder boolBuilder = new BoolQuery.Builder();
 
         // 房间集合
@@ -100,74 +105,135 @@ public class WalletCoinRecordSearch {
 
 
     /**
-     * 深分页查询用户金币流水，按create_time、id倒序返回。
+     * 统计指定用户在指定时间段内的金币流水记录总数。
      *
-     * @param userId         用户ID
-     * @param businessType   业务类型
-     * @param startTime      开始时间，格式yyyy-MM-dd HH:mm:ss
-     * @param endTime        结束时间，格式yyyy-MM-dd HH:mm:ss
-     * @param pageSize       每页条数
-     * @param lastCreateTime 上一页最后一条记录的create_time
-     * @param lastId         上一页最后一条记录的id
+     * @param dto 查询参数
+     * @return 总数
+     */
+    public long count(SearchCoinRecordDTO dto) {
+
+        List<String> indices = EsSearchUtil.getIndices(EsIndexAlias.SANO_WALLET_COIN_RECORD, dto.getStartTime(), dto.getEndTime());
+        BoolQuery.Builder boolBuilder = new BoolQuery.Builder();
+        // 设置查询条件
+        setBoolQuery(boolBuilder, dto);
+        try {
+            CountRequest countRequest = CountRequest.of(c -> c
+                    .index(indices)
+                    .query(boolBuilder.build()._toQuery())
+                    // 某天无数据时可能没有物理索引，忽略不存在索引可以避免整个查询失败。
+                    .ignoreUnavailable(true)
+            );
+            CountResponse count = client.count(countRequest);
+            return count.count();
+        } catch (IOException e) {
+            log.error("ES count coin records failed, userId={}, businessType={}, startTime={}, endTime={}, error={}",
+                    dto.getUserId(), dto.getBusinessType(), dto.getStartTime(), dto.getEndTime(), e.getMessage(), e);
+            return 0L;
+        }
+    }
+
+
+    /**
+     * 执行ES查询并解析结果。
+     *
+     * @param dto 查询请求
      * @return 金币流水列表
      */
-    public List<CoinRecordVO> searchCoinRecords(Long userId, Long businessType,
-                                                String startTime, String endTime, Integer pageSize,
-                                                String lastCreateTime, Long lastId) {
-        long totalStartMillis = System.currentTimeMillis();
-        SearchRequest.Builder searchBuilder = new SearchRequest.Builder();
-        EsSearchUtil.setDateRangeIndices(searchBuilder, EsIndexAlias.SANO_WALLET_COIN_RECORD, startTime, endTime);
-        BoolQuery.Builder boolBuilder = new BoolQuery.Builder();
-
-        // 固定查询用户ID，ES字段使用下划线命名。
-        if (userId != null) {
-            boolBuilder.must(EsSearchUtil.getTerm("user_id", userId));
-        }
-        // 可选查询业务类型，ES字段使用下划线命名。
-        if (businessType != null) {
-            boolBuilder.must(EsSearchUtil.getTerm("business_type", businessType));
-        }
-        // 时间段
-        EsSearchUtil.setDateEQ(boolBuilder, "create_time", TimeUtils.BASIC, startTime, endTime);
-        searchBuilder.query(boolBuilder.build()._toQuery());
-
-        // search_after深分页必须和排序字段一一对应，顺序也必须保持一致。
-        EsSearchUtil.setOrder(searchBuilder, "create_time", SortOrder.Desc);
-        EsSearchUtil.setOrder(searchBuilder, "id", SortOrder.Desc);
-        searchBuilder.size(pageSize);
-        if (StringUtils.isNotBlank(lastCreateTime) && lastId != null) {
-            searchBuilder.searchAfter(List.of(FieldValue.of(lastCreateTime), FieldValue.of(lastId)));
-        }
-        long buildCostMs = System.currentTimeMillis() - totalStartMillis;
-
+    public List<CoinRecordVO> list(SearchCoinRecordDTO dto) {
+        long searchStartMillis = System.currentTimeMillis();
         try {
-            long searchStartMillis = System.currentTimeMillis();
-            SearchRequest build = searchBuilder.build();
+            SearchRequest build = buildSearchRequest(dto).build();
             SearchResponse<CoinRecordVO> response = client.search(build, CoinRecordVO.class);
-            long searchCostMs = System.currentTimeMillis() - searchStartMillis;
 
-            long parseStartMillis = System.currentTimeMillis();
             List<CoinRecordVO> records = new ArrayList<>();
             for (Hit<CoinRecordVO> hit : response.hits().hits()) {
                 if (hit.source() != null) {
                     records.add(hit.source());
                 }
             }
-            long parseCostMs = System.currentTimeMillis() - parseStartMillis;
-            long totalCostMs = System.currentTimeMillis() - totalStartMillis;
-
-            log.info("===> ES-Search coin records. userId={}, businessType={}, startTime={}, endTime={}, pageSize={}, lastCreateTime={}, lastId={}, size={}, buildCostMs={}, searchCostMs={}, parseCostMs={}, totalCostMs={}",
-                    userId, businessType, startTime, endTime, pageSize, lastCreateTime, lastId, records.size(),
-                    buildCostMs, searchCostMs, parseCostMs, totalCostMs);
+            long searchCostMs = System.currentTimeMillis() - searchStartMillis;
+            log.info("===> ES-Search parse coin records. userId={}, businessType={}, startTime={}, endTime={}, pageSize={}, lastCreateTime={}, lastId={}, size={}, searchCostMs={}",
+                    dto.getUserId(), dto.getBusinessType(), dto.getStartTime(), dto.getEndTime(), dto.getPageSize(),
+                    dto.getLastCreateTime(), dto.getLastId(), records.size(), searchCostMs);
             log.info("===> 聚类查询DSL:{}", build);
             return records;
         } catch (IOException | ElasticsearchException e) {
-            log.error("ES search coin records failed, userId={}, businessType={}, startTime={}, endTime={}, pageSize={}, lastCreateTime={}, lastId={}, buildCostMs={}, totalCostMs={}, error={}",
-                    userId, businessType, startTime, endTime, pageSize, lastCreateTime, lastId,
-                    buildCostMs, System.currentTimeMillis() - totalStartMillis, e.getMessage(), e);
+            log.error("ES search coin records failed, userId={}, businessType={}, startTime={}, endTime={}, pageSize={}, lastCreateTime={}, lastId={}, searchCostMs={}, error={}",
+                    dto.getUserId(), dto.getBusinessType(), dto.getStartTime(), dto.getEndTime(), dto.getPageSize(),
+                    dto.getLastCreateTime(), dto.getLastId(), System.currentTimeMillis() - searchStartMillis, e.getMessage(), e);
             return new ArrayList<>();
         }
     }
 
+    /**
+     * 构建ES查询请求。
+     *
+     * @param dto 查询参数
+     * @return 构建好的SearchRequest
+     */
+    private SearchRequest.Builder buildSearchRequest(SearchCoinRecordDTO dto) {
+        long totalStartMillis = System.currentTimeMillis();
+        SearchRequest.Builder searchBuilder = new SearchRequest.Builder();
+        searchBuilder.index(EsSearchUtil.getIndices(EsIndexAlias.SANO_WALLET_COIN_RECORD, dto.getStartTime(), dto.getEndTime()));
+        // 某天无数据时可能没有物理索引，忽略不存在索引可以避免整个查询失败。
+        searchBuilder.ignoreUnavailable(true);
+        BoolQuery.Builder boolBuilder = new BoolQuery.Builder();
+
+        setBoolQuery(boolBuilder, dto);
+        searchBuilder.query(boolBuilder.build()._toQuery());
+        // 搜索类型，0:深度分页，1:普通分页（普通分页最多查询10000条数据，超过10000条数据请使用深度分页
+        if (dto.getSearchType() == 0) {
+            // search_after深分页必须和排序字段一一对应，顺序也必须保持一致。
+            EsSearchUtil.setOrder(searchBuilder, "create_time", SortOrder.Desc);
+            EsSearchUtil.setOrder(searchBuilder, "id", SortOrder.Desc);
+            searchBuilder.size(dto.getPageSize());
+            if (StringUtils.isNotBlank(dto.getLastCreateTime()) && dto.getLastId() != null) {
+                searchBuilder.searchAfter(List.of(
+                        FieldValue.of(dto.getLastCreateTime()),
+                        FieldValue.of(dto.getLastId())
+                ));
+            }
+        } else {
+            EsSearchUtil.setOrder(searchBuilder, "create_time", SortOrder.Desc);
+            EsSearchUtil.setPage(searchBuilder, dto.getPageIndex(), dto.getPageSize());
+        }
+        long buildCostMs = System.currentTimeMillis() - totalStartMillis;
+        log.info("===> ES-Search build search request. userId={}, businessType={}, startTime={}, endTime={}, pageSize={}, lastCreateTime={}, lastId={}, buildCostMs={}",
+                dto.getUserId(), dto.getBusinessType(), dto.getStartTime(), dto.getEndTime(),
+                dto.getPageSize(), dto.getLastCreateTime(), dto.getLastId(), buildCostMs);
+        return searchBuilder;
+    }
+
+    /**
+     * 设置BoolQuery查询条件。
+     *
+     * @param boolBuilder BoolQuery构建器
+     * @param dto         查询参数
+     */
+    private static void setBoolQuery(BoolQuery.Builder boolBuilder, SearchCoinRecordDTO dto) {
+        // 固定查询用户ID，ES字段使用下划线命名。
+        if (dto.getUserId() != null) {
+            boolBuilder.must(EsSearchUtil.getTerm("user_id", dto.getUserId()));
+        }
+        // 可选查询对方用户ID，ES字段使用下划线命名。
+        if (dto.getTaUserId() != null) {
+            boolBuilder.must(EsSearchUtil.getTerm("ta_user_id", dto.getTaUserId()));
+        }
+        // 可选查询礼物ID，ES字段使用下划线命名。
+        if (dto.getPropId() != null) {
+            boolBuilder.must(EsSearchUtil.getTerm("prop_id", dto.getPropId()));
+        }
+        // 可选查询房间ID，ES字段使用下划线命名。
+        if (dto.getRoomId() != null) {
+            boolBuilder.must(EsSearchUtil.getTerm("room_id", dto.getRoomId()));
+        }
+        // 可选查询业务类型，ES字段使用下划线命名。
+        if (dto.getBusinessType() != null) {
+            boolBuilder.must(EsSearchUtil.getTerm("business_type", dto.getBusinessType()));
+        }
+        // 时间段
+        EsSearchUtil.setDateEQ(boolBuilder, "create_time", TimeUtils.BASIC, dto.getStartTime(), dto.getEndTime());
+
+    }
 
 }
