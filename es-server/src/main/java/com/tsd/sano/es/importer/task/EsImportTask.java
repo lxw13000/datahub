@@ -1,5 +1,6 @@
 package com.tsd.sano.es.importer.task;
 
+import com.tsd.sano.es.core.exception.ServiceException;
 import com.tsd.sano.es.importer.notify.ImportNotifyService;
 import com.tsd.sano.es.importer.pipeline.EsImportService;
 import com.tsd.sano.es.importer.pipeline.config.EsImportProperties;
@@ -155,6 +156,93 @@ public class EsImportTask {
             log.error("===> ES-Import manual task submit failed. startDate={}, endDate={}, error={}",
                     startDate, endDate, e.getMessage(), e);
             return false;
+        }
+    }
+
+    /**
+     * 手动补指定单表的日期段数据。
+     *
+     * <p>调用方确认数据尚未同步后，直接按天创建PENDING任务；已有同ID任务由任务索引create语义自然去重。</p>
+     *
+     * @param indexAlias 表配置中的ES业务alias
+     * @param startDate 开始日期，包含
+     * @param endDate 结束日期，包含
+     * @return 提交结果说明
+     */
+    public String importTableDateRange(String indexAlias, LocalDate startDate, LocalDate endDate) {
+        EsImportProperties.TableConfig table = properties.getTables().stream()
+                .filter(item -> item.isEnabled() && StringUtils.equals(item.getIndexAlias(), indexAlias))
+                .findFirst()
+                .orElseThrow(() -> new ServiceException("ES import table config not found or disabled, indexAlias=" + indexAlias));
+
+        String tableName = StringUtils.defaultIfBlank(table.getTableName(), table.getIndexAlias());
+        int createdCount = 0;
+        int existingCount = 0;
+        int failedCount = 0;
+        for (LocalDate importDate = startDate; !importDate.isAfter(endDate); importDate = importDate.plusDays(1)) {
+            String importDateText = IMPORT_DATE_FORMATTER.format(importDate);
+
+            try {
+                SanoImportTask task = new SanoImportTask();
+                task.setTableName(tableName);
+                task.setIndexAlias(table.getIndexAlias());
+                task.setIndexName(table.getIndexAlias() + "_" + importDateText);
+                task.setImportDate(importDateText);
+                task.setStatus(SanoImportTaskStatus.PENDING.name());
+                task.setLastSuccessId(0L);
+
+                if (importTaskService.addTask(task)) {
+                    createdCount++;
+                } else {
+                    // 同一张表同一天已有任务时不更新原记录，由现有任务状态决定后续执行方式。
+                    existingCount++;
+                }
+            } catch (Exception e) {
+                // 单天任务写入失败不阻断日期段内其他任务，便于一次补数尽可能推进。
+                failedCount++;
+                log.error("===> ES-Import manual task create failed. alias={}, table={}, date={}, error={}",
+                        table.getIndexAlias(), tableName, importDate, e.getMessage(), e);
+            }
+        }
+
+        if (!TASK_DISPATCHING.compareAndSet(false, true)) {
+            // 任务已落库，当前同步完成后，下一次队列扫描会继续处理PENDING任务。
+            log.info("===> ES-Import manual table task queued. alias={}, table={}, startDate={}, endDate={}, created={}, existing={}, failed={}",
+                    table.getIndexAlias(), tableName, startDate, endDate, createdCount, existingCount, failedCount);
+            return "任务已入队，当前已有同步任务执行中，等待后续队列扫描。created=" + createdCount
+                    + ", existing=" + existingCount + ", failed=" + failedCount;
+        }
+
+        try {
+            esImportExecutor.execute(() -> {
+                try {
+                    long maxRunMillis = Math.max(1, properties.getMaxRunMinutes()) * 60L * 1000L;
+                    long deadlineMillis = System.currentTimeMillis() + maxRunMillis;
+                    log.info("===> ES-Import manual table task start. alias={}, table={}, startDate={}, endDate={}, maxRunMinutes={}",
+                            table.getIndexAlias(), tableName, startDate, endDate, properties.getMaxRunMinutes());
+
+                    repairExpiredRunningTasks();
+                    // 复用待任务队列扫描，按现有顺序串行执行，不额外创建并发同步链路。
+                    runPendingTasks(deadlineMillis);
+
+                    log.info("===> ES-Import manual table task finished. alias={}, table={}, startDate={}, endDate={}",
+                            table.getIndexAlias(), tableName, startDate, endDate);
+                } catch (Exception e) {
+                    // 后台编排异常需要明确记录，但不能影响已经落库的任务后续被定时器续跑。
+                    log.error("===> ES-Import manual table task dispatcher failed. alias={}, table={}, startDate={}, endDate={}, error={}",
+                            table.getIndexAlias(), tableName, startDate, endDate, e.getMessage(), e);
+                } finally {
+                    TASK_DISPATCHING.set(false);
+                }
+            });
+            return "任务已提交后台队列扫描。created=" + createdCount
+                    + ", existing=" + existingCount + ", failed=" + failedCount;
+        } catch (Exception e) {
+            TASK_DISPATCHING.set(false);
+            log.error("===> ES-Import manual table task submit failed. alias={}, table={}, error={}",
+                    table.getIndexAlias(), tableName, e.getMessage(), e);
+            return "任务已写入待执行队列，但后台扫描提交失败，等待下次定时任务处理。created=" + createdCount
+                    + ", existing=" + existingCount + ", failed=" + failedCount;
         }
     }
 

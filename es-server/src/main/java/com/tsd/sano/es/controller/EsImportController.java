@@ -86,4 +86,35 @@ public class EsImportController {
         }
     }
 
+    /**
+     * 手动补指定单表的完整日期段数据。
+     *
+     * <p>调用方确认日期段未同步后，接口直接创建该表对应的PENDING任务并触发待任务队列扫描。</p>
+     */
+    @GetMapping("/importTableDateRange")
+    public ResultVO<String> importTableDateRange(String indexAlias, String startDate, String endDate) {
+        if (StringUtils.isBlank(indexAlias)) {
+            throw new ServiceException("导入表indexAlias不能为空，例如：sano_game_record");
+        }
+        if (StringUtils.isBlank(startDate) || StringUtils.isBlank(endDate)) {
+            throw new ServiceException("导入日期段不能为空，请使用yyyyMMdd，例如：startDate=20260601&endDate=20260605");
+        }
+
+        try {
+            LocalDate start = LocalDate.parse(startDate, IMPORT_DATE_FORMATTER);
+            LocalDate end = LocalDate.parse(endDate, IMPORT_DATE_FORMATTER);
+            if (start.isAfter(end)) {
+                throw new ServiceException("开始日期不能大于结束日期");
+            }
+            if (end.isAfter(LocalDate.now())) {
+                throw new ServiceException("结束日期不能是未来时间");
+            }
+
+            String result = importTask.importTableDateRange(indexAlias.trim(), start, end);
+            return ResultVO.successMessage(result);
+        } catch (DateTimeParseException e) {
+            throw new ServiceException("导入日期格式错误，请使用yyyyMMdd，例如：startDate=20260601&endDate=20260605");
+        }
+    }
+
 }
