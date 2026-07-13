@@ -18,6 +18,8 @@ import co.elastic.clients.util.NamedValue;
 import com.tsd.sano.es.controller.sta.dto.SearchCoinRecordDTO;
 import com.tsd.sano.es.controller.sta.vo.CoinRecordVO;
 import com.tsd.sano.es.controller.sta.vo.CoinGiftDailyStatVO;
+import com.tsd.sano.es.controller.sta.vo.CoinGiftDailyPropStatVO;
+import com.tsd.sano.es.controller.sta.vo.CoinGiftPropConsumeVO;
 import com.tsd.sano.es.controller.sta.vo.WeekStatVO;
 import com.tsd.sano.es.core.util.TimeUtils;
 import com.tsd.sano.es.search.util.EsSearchUtil;
@@ -250,6 +252,65 @@ public class WalletCoinRecordSearch {
             return stats;
         } catch (IOException | ElasticsearchException e) {
             log.error("ES search coin gift daily stat failed, indices={}, startDate={}, endDate={}, searchCostMs={}, error={}",
+                    indices, startDate, endDate, System.currentTimeMillis() - searchStartMillis, e.getMessage(), e);
+            return new ArrayList<>();
+        }
+    }
+
+    /**
+     * 按天统计每个幸运礼物的消费金额。
+     *
+     * @param startDate 开始业务日期，格式 yyyy-MM-dd
+     * @param endDate   结束业务日期，格式 yyyy-MM-dd
+     * @return 每天消费金额最高的 20 个幸运礼物
+     */
+    public List<CoinGiftDailyPropStatVO> coinGiftDailyPropStat(String startDate, String endDate) {
+        String startTime = startDate + " 00:00:00";
+        String endTime = endDate + " 23:59:59";
+        List<String> indices = EsSearchUtil.getIndices(EsIndexAlias.SANO_WALLET_COIN_RECORD, startTime, endTime);
+        long searchStartMillis = System.currentTimeMillis();
+        SearchRequest.Builder searchBuilder = new SearchRequest.Builder();
+        searchBuilder.index(indices).ignoreUnavailable(true).size(0);
+
+        BoolQuery.Builder boolBuilder = new BoolQuery.Builder();
+        // dt 用于按业务日期过滤，business_type=11 表示幸运礼物消费。
+        EsSearchUtil.setDateEQ(boolBuilder, "dt", "yyyy-MM-dd", startDate, endDate);
+        boolBuilder.must(EsSearchUtil.getTerm("business_type", 11));
+        searchBuilder.query(boolBuilder.build()._toQuery());
+        // 每个日期桶内按 tokens 降序取前 20 个礼物，避免高基数礼物聚合返回过大。
+        searchBuilder.aggregations("daily", aggregation -> aggregation
+                .dateHistogram(histogram -> histogram.field("dt").calendarInterval(CalendarInterval.Day).format("yyyy-MM-dd"))
+                .aggregations("props", sub -> sub.terms(terms -> terms
+                        .field("prop_id")
+                        .size(20)
+                        .order(NamedValue.of("tokens", SortOrder.Desc)))
+                        .aggregations("tokens", value -> value.sum(sum -> sum.field("tokens")))));
+
+        try {
+            SearchResponse<Void> response = client.search(searchBuilder.build(), Void.class);
+            List<CoinGiftDailyPropStatVO> stats = new ArrayList<>();
+            List<DateHistogramBucket> buckets = response.aggregations().get("daily").dateHistogram().buckets().array();
+            for (DateHistogramBucket bucket : buckets) {
+                CoinGiftDailyPropStatVO stat = new CoinGiftDailyPropStatVO();
+                stat.setDt(bucket.keyAsString());
+                List<CoinGiftPropConsumeVO> props = new ArrayList<>();
+                List<LongTermsBucket> propBuckets = bucket.aggregations().get("props").lterms().buckets().array();
+                for (LongTermsBucket propBucket : propBuckets) {
+                    CoinGiftPropConsumeVO prop = new CoinGiftPropConsumeVO();
+                    prop.setPropId(propBucket.key());
+                    long tokens = Math.round(propBucket.aggregations().get("tokens").sum().value());
+                    prop.setConsumeDollar(BigDecimal.valueOf(tokens).divide(TOKENS_PER_DOLLAR, 3, RoundingMode.HALF_UP));
+                    props.add(prop);
+                }
+                stat.setProps(props);
+                stats.add(stat);
+            }
+            log.info("===> ES-Search coin gift daily prop stat. indices={}, startDate={}, endDate={}, daySize={}, esTookMs={}, timedOut={}, searchCostMs={}",
+                    indices, startDate, endDate, stats.size(), response.took(), response.timedOut(),
+                    System.currentTimeMillis() - searchStartMillis);
+            return stats;
+        } catch (IOException | ElasticsearchException e) {
+            log.error("ES search coin gift daily prop stat failed, indices={}, startDate={}, endDate={}, searchCostMs={}, error={}",
                     indices, startDate, endDate, System.currentTimeMillis() - searchStartMillis, e.getMessage(), e);
             return new ArrayList<>();
         }

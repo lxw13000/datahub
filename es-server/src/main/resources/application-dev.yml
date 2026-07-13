@@ -48,7 +48,8 @@ sano:
     async-queue-size: 2048
   es:
     #    uris: ${ES_URIS:127.0.0.1:9201}
-    uris: ${ES_URIS:es-test.fofunlive.net}
+#    uris: ${ES_URIS:es-test.fofunlive.net}
+    uris: ${ES_URIS:es.fofunlive.net}
     username: ${ES_USERNAME:elastic}
     password: ${ES_PASSWORD:es2peter}
     socket-timeout: 600000
