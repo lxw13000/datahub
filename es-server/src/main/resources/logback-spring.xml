@@ -145,8 +145,8 @@
         <includeCallerData>false</includeCallerData>
     </appender>
 
-    <!-- ===================== 开发环境 ===================== -->
-    <springProfile name="dev">
+    <!-- ===================== 开发/测试环境 ===================== -->
+    <springProfile name="dev | test">
         <appender name="DEV_CONSOLE" class="ch.qos.logback.core.ConsoleAppender">
             <encoder>
                 <pattern>${DEV_CONSOLE_PATTERN}</pattern>
