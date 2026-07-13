@@ -1,0 +1,180 @@
+spring:
+  data:
+    redis:
+      host: 127.0.0.1
+      port: 6379
+      timeout: 3000ms
+      lettuce:
+        pool:
+          max-active: 20
+          max-idle: 10
+          min-idle: 2
+          max-wait: 2000ms
+  datasource:
+    driver-class-name: com.mysql.cj.jdbc.Driver
+    url: jdbc:mysql://47.128.144.26:3306/sano?useUnicode=true&characterEncoding=UTF8&zeroDateTimeBehavior=convertToNull&allowMultiQueries=true&useSSL=false&serverTimezone=Asia/Chongqing&allowPublicKeyRetrieval=true
+    username: ${MYSQL_UNM:root}
+    password: ${MYSQL_PWD:SADFH28!asoaignljASjacoOs}
+    hikari:
+      # 导入任务串行读取MySQL，限制连接池规模，避免误触发并发任务占用过多数据库连接。
+      maximum-pool-size: 5
+      minimum-idle: 1
+      connection-timeout: 30000
+      idle-timeout: 300000
+      max-lifetime: 1200000
+      keepalive-time: 300000
+
+logging:
+  config: classpath:logback-spring.xml
+  file:
+    path: ${LOG_DIR:logs}
+  level:
+    root: INFO
+    com.tsd.sano.es: DEBUG
+    com.tsd.sano.es.importer: DEBUG
+    org.springframework: INFO
+    org.springframework.jdbc.core: INFO
+    co.elastic.clients: INFO
+    org.elasticsearch.client: WARN
+    io.lettuce.core: INFO
+    com.zaxxer.hikari: INFO
+
+sano:
+  log:
+    # 开发环境保留周期短，便于本地排查时快速滚动。
+    max-file-size: 50MB
+    max-history: 7
+    total-size-cap: 2GB
+    async-queue-size: 2048
+  es:
+    #    uris: ${ES_URIS:127.0.0.1:9201}
+    uris: ${ES_URIS:es-test.fofunlive.net}
+    username: ${ES_USERNAME:elastic}
+    password: ${ES_PASSWORD:es2peter}
+    socket-timeout: 600000
+    connection-timeout: 500000
+    connection-request-timeout: 5000
+    max-conn-total: 100
+    max-conn-per-route: 20
+
+    import:
+      # 默认关闭；确认ES和数据库配置无误后再打开
+      task-enabled: true
+      # 每天02:30导入昨天的数据
+      cron: "0 30 2 * * ?"
+      # 每轮调度最多运行480分钟，超时后不再启动下一条待执行任务
+      max-run-minutes: 5
+      # 每轮调度最多拉取100条待执行任务，覆盖多表和少量历史积压场景
+      task-fetch-limit: 100
+      # 每批读取数据库数量
+      read-batch-size: 5000
+      # Bulk线程数
+      worker-count: 4
+      # BlockingQueue 队列缓存容量
+      queue-capacity: 10
+      # 每次Bulk文档数
+      bulk-actions: 3000
+      # 或每次bulk累计8MB立即发送，单位MB
+      bulk-size-mb: 5
+      # 最大重试次数
+      retry-times: 3
+      # Retry等待(ms)
+      retry-interval: 1000
+      # 失败文档数超过该值时不绑定alias
+      max-failed-documents: 1000
+      # 失败率超过该值时不绑定alias，0.001 = 0.1%
+      max-failure-rate: 0.001
+      # 是否开启导入监控
+      enable-monitor: true
+
+      # 单机Docker ES建议保持0副本
+      # 导入期间是否关闭Refresh
+      disable-refresh: true
+      # 导入期间是否关闭副本
+      disable-replica: true
+
+      notify:
+        # 导入任务结束通知总开关，开发环境默认关闭，避免本地调试误发。
+        enabled: ${IMPORT_NOTIFY_ENABLED:false}
+        # 是否发送成功任务通知。
+        success-enabled: false
+        # 是否发送失败任务通知。
+        failure-enabled: false
+        # 是否发送超时暂停任务通知。
+        timeout-enabled: false
+        # 通知标题前缀，便于在IM中识别来源。
+        subject-prefix: "[SANO-ES-TEST]"
+        channels:
+          lark:
+            # 飞书/Lark机器人开关。
+            enabled: ${LARK_NOTIFY_ENABLED:false}
+            # 飞书/Lark机器人webhook地址。
+            webhook-url: ${LARK_WEBHOOK_URL:https://open.larksuite.com/open-apis/bot/v2/hook/c1af0ddb-8ba5-4dae-a0e2-ecc476bcc5fd}
+            # 飞书/Lark机器人签名密钥，未开启签名时留空。
+            secret: ${LARK_WEBHOOK_SECRET:6MKCorKya6KxX99qxqaKwh}
+          dingtalk:
+            # 钉钉机器人开关。
+            enabled: ${DINGTALK_NOTIFY_ENABLED:false}
+            # 钉钉机器人webhook地址。
+            webhook-url: ${DINGTALK_WEBHOOK_URL:}
+            # 钉钉机器人签名密钥，未开启签名时留空。
+            secret: ${DINGTALK_WEBHOOK_SECRET:}
+
+      tables:
+        - enabled: true
+          index-alias: sano_wallet_coin_record
+          table-name: sano_wallet_coin_record
+          mapping-file: sano_wallet_coin_record.json
+          # 导入完成是否删除该表历史索引
+          delete-history-index: true
+          # 该表历史索引保留天数
+          reserve-days: 30
+          id-column: id
+          dt-column: dt
+          # dt字段类型；DATE按dt = importDate查询。
+          dt-column-type: DATE
+          # where-sql为空时自动使用 dt = importDate
+          where-sql:
+        - enabled: true
+          index-alias: sano_wallet_diamond_record
+          table-name: sano_wallet_diamond_record
+          mapping-file: sano_wallet_diamond_record.json
+          # 导入完成是否删除该表历史索引
+          delete-history-index: true
+          # 该表历史索引保留天数
+          reserve-days: 30
+          id-column: id
+          dt-column: dt
+          # dt字段类型；DATE按dt = importDate查询。
+          dt-column-type: DATE
+          # where-sql为空时自动使用 dt = importDate
+          where-sql:
+        - enabled: true
+          index-alias: sano_wallet_lucky_diamond_record_10m
+          table-name: sano_wallet_lucky_diamond_record_10m
+          mapping-file: sano_wallet_lucky_diamond_record_10m.json
+          # 导入完成是否删除该表历史索引
+          delete-history-index: true
+          # 该表历史索引保留天数
+          reserve-days: 30
+          id-column: id
+          dt-column: dt
+          # dt字段类型；DATE按dt = importDate查询。
+          dt-column-type: DATE
+          # where-sql为空时自动使用 dt = importDate
+          where-sql:
+        - enabled: true
+          index-alias: sano_game_record
+          table-name: sano_game_record
+          mapping-file: sano_game_record.json
+          # 导入完成是否删除该表历史索引
+          delete-history-index: true
+          # 该表历史索引保留天数
+          reserve-days: 30
+          id-column: id
+          # 源表没有DATE分区字段，使用创建时间按天读取。
+          dt-column: create_time
+          # DATETIME/TIMESTAMP字段按当天左闭右开时间范围查询。
+          dt-column-type: DATETIME
+          # where-sql为空时自动按create_time的当天时间范围查询。
+          where-sql:
