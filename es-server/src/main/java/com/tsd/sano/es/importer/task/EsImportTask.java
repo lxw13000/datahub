@@ -267,6 +267,7 @@ public class EsImportTask {
                         config.setWhereSql(table.getWhereSql());
                         config.setIdColumn(table.getIdColumn());
                         config.setDtColumn(table.getDtColumn());
+                        config.setDtColumnType(table.getDtColumnType());
                         config.setDeleteHistoryIndex(table.isDeleteHistoryIndex());
                         config.setReserveDays(table.getReserveDays());
                     });

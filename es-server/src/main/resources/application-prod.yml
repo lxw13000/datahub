@@ -130,6 +130,8 @@ sano:
           reserve-days: 60
           id-column: id
           dt-column: dt
+          # dt字段类型；DATE按dt = importDate查询。
+          dt-column-type: DATE
           # where-sql为空时自动使用 dt = importDate
           where-sql:
         - enabled: true
@@ -142,6 +144,8 @@ sano:
           reserve-days: 60
           id-column: id
           dt-column: dt
+          # dt字段类型；DATE按dt = importDate查询。
+          dt-column-type: DATE
           # where-sql为空时自动使用 dt = importDate
           where-sql:
         - enabled: true
@@ -154,7 +158,24 @@ sano:
           reserve-days: 60
           id-column: id
           dt-column: dt
+          # dt字段类型；DATE按dt = importDate查询。
+          dt-column-type: DATE
           # where-sql为空时自动使用 dt = importDate
+          where-sql:
+        - enabled: true
+          index-alias: sano_game_record
+          table-name: sano_game_record
+          mapping-file: sano_game_record.json
+          # 导入完成是否删除该表历史索引
+          delete-history-index: true
+          # 该表历史索引保留天数
+          reserve-days: 60
+          id-column: id
+          # 源表没有DATE分区字段，使用创建时间按天读取。
+          dt-column: create_time
+          # DATETIME/TIMESTAMP字段按当天左闭右开时间范围查询。
+          dt-column-type: DATETIME
+          # where-sql为空时自动按create_time的当天时间范围查询。
           where-sql:
 
 

@@ -1,0 +1,70 @@
+{
+  "settings": {
+    "index": {
+      "number_of_shards": "1",
+      "number_of_replicas": "0",
+      "max_result_window": 20000
+    },
+    "analysis": {
+      "tokenizer": {
+        "ngram_tokenizer": {
+          "type": "ngram",
+          "min_gram": 1,
+          "max_gram": 1,
+          "token_chars": [
+            "letter",
+            "digit"
+          ]
+        }
+      },
+      "analyzer": {
+        "ngram_analyzer": {
+          "type": "custom",
+          "tokenizer": "ngram_tokenizer",
+          "filter": [
+            "lowercase"
+          ]
+        }
+      }
+    }
+  },
+  "mappings": {
+    "dynamic": "strict",
+    "properties": {
+      "id": {
+        "type": "long"
+      },
+      "record_id": {
+        "type": "keyword"
+      },
+      "producer_code": {
+        "type": "keyword"
+      },
+      "game_id": {
+        "type": "integer"
+      },
+      "room_id": {
+        "type": "integer"
+      },
+      "user_id": {
+        "type": "long"
+      },
+      "token": {
+        "type": "long"
+      },
+      "tokens_new": {
+        "type": "long"
+      },
+      "tokens_old": {
+        "type": "long"
+      },
+      "business_type": {
+        "type": "integer"
+      },
+      "create_time": {
+        "type": "date",
+        "format": "yyyy-MM-dd'T'HH:mm:ss || yyyy-MM-dd HH:mm:ss || yyyy-MM-dd || yyyy-MM || yyyy || epoch_millis"
+      }
+    }
+  }
+}

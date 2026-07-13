@@ -228,9 +228,14 @@ public class EsImportProperties {
         private String idColumn = "id";
 
         /**
-         * 分区日期字段，whereSql为空时默认按该字段做T+1过滤。
+         * 分区日期字段，whereSql为空时按该字段做T+1过滤。
          */
         private String dtColumn = "dt";
+
+        /**
+         * 分区日期字段类型，只支持DATE或DATETIME；DATE按等值查询，DATETIME按当天时间范围查询。
+         */
+        private String dtColumnType = "DATE";
 
         /**
          * 导入完成是否删除该表历史索引。

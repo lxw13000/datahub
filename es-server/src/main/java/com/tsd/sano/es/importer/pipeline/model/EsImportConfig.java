@@ -51,10 +51,15 @@ public class EsImportConfig {
      */
     private String idColumn = "id";
 
-    /**
-     * 分区日期字段，whereSql为空时默认按该字段做T+1过滤。
-     */
-    private String dtColumn = "dt";
+        /**
+         * 分区日期字段，whereSql为空时按该字段做T+1过滤。
+         */
+        private String dtColumn = "dt";
+
+        /**
+         * 分区日期字段类型，只支持DATE或DATETIME。
+         */
+        private String dtColumnType = "DATE";
 
     /**
      * 起始游标ID，续跑时从last_success_id之后继续读取。
