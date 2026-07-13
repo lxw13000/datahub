@@ -17,7 +17,7 @@ import org.springframework.web.bind.annotation.RestController;
 import java.util.List;
 
 /**
- * 钱包金币统计接口。
+ * 金币记录接口
  *
  * @author lxw
  * @version V1.0
@@ -34,7 +34,7 @@ public class WalletCoinController {
 
 
     /**
-     * 统计指定房间在指定时间段内的金币周数据。
+     * 统计指定房间金币周数据
      */
     @PostMapping("/staCoinWeek")
     public ResultVO<WeekStatVO> staCoinWeek(@RequestBody SatCoinWeekDTO weekDTO) {
@@ -50,7 +50,7 @@ public class WalletCoinController {
     }
 
     /**
-     * 查询指定用户在指定时间段内的金币流水记录。
+     * 查询app个人金币记录
      */
     @PostMapping("/searchCoinRecords")
     public ResultVO<List<CoinRecordVO>> searchCoinRecords(@RequestBody AppCoinRecordDTO recordDTO) {
@@ -69,7 +69,7 @@ public class WalletCoinController {
     }
 
     /**
-     * 查询指定用户在指定时间段内的金币流水记录总数。
+     * 查询金币流水记录总数
      */
     @PostMapping("/count")
     public ResultVO<Long> count(@RequestBody SearchCoinRecordDTO recordDTO) {
@@ -78,7 +78,7 @@ public class WalletCoinController {
     }
 
     /**
-     * 查询指定用户在指定时间段内的金币流水记录列表。
+     * 查询金币流水记录列表
      */
     @PostMapping("/list")
     public ResultVO<List<CoinRecordVO>> list(@RequestBody SearchCoinRecordDTO recordDTO) {

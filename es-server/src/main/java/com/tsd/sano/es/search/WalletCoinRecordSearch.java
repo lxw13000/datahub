@@ -54,8 +54,11 @@ public class WalletCoinRecordSearch {
      */
     public WeekStatVO staWeek(List<Integer> roomIds, String startTime, String endTime) {
 
+        // 根据查询日期只选择对应的按天索引，避免无关历史索引参与聚合。
+        List<String> indices = EsSearchUtil.getIndices(EsIndexAlias.SANO_WALLET_COIN_RECORD, startTime, endTime);
+        long searchStartMillis = System.currentTimeMillis();
         SearchRequest.Builder searchBuilder = new SearchRequest.Builder();
-        searchBuilder.index(EsSearchUtil.getIndices(EsIndexAlias.SANO_WALLET_COIN_RECORD, startTime, endTime));
+        searchBuilder.index(indices);
         // 某天无数据时可能没有物理索引，忽略不存在索引可以避免整个查询失败。
         searchBuilder.ignoreUnavailable(true);
         BoolQuery.Builder boolBuilder = new BoolQuery.Builder();
@@ -94,11 +97,13 @@ public class WalletCoinRecordSearch {
             stat.setConsumeTokens(Math.round(aggregations.get("consume_tokens").sum().value()));
             stat.setLuckyGiftTokens(Math.round(aggregations.get("lucky_gift").filter().aggregations().get("tokens").sum().value()));
             stat.setGameTokens(Math.round(aggregations.get("game").filter().aggregations().get("tokens").sum().value()));
-            log.info("===> ES-Search wallet coin week stat. roomCount={}, startTime={}, endTime={}, stat={}", roomIds.size(), startTime, endTime, stat);
+            log.info("===> ES-Search wallet coin week stat. indices={}, roomCount={}, startTime={}, endTime={}, esTookMs={}, timedOut={}, searchCostMs={}, stat={}",
+                    indices, roomIds.size(), startTime, endTime, response.took(), response.timedOut(),
+                    System.currentTimeMillis() - searchStartMillis, stat);
             return stat;
         } catch (IOException | ElasticsearchException e) {
-            log.error("ES search wallet coin week stat failed, roomCount={}, startTime={}, endTime={}, error={}",
-                    roomIds.size(), startTime, endTime, e.getMessage(), e);
+            log.error("ES search wallet coin week stat failed, indices={}, roomCount={}, startTime={}, endTime={}, searchCostMs={}, error={}",
+                    indices, roomIds.size(), startTime, endTime, System.currentTimeMillis() - searchStartMillis, e.getMessage(), e);
             return new WeekStatVO();
         }
     }
@@ -113,6 +118,7 @@ public class WalletCoinRecordSearch {
     public long count(SearchCoinRecordDTO dto) {
 
         List<String> indices = EsSearchUtil.getIndices(EsIndexAlias.SANO_WALLET_COIN_RECORD, dto.getStartTime(), dto.getEndTime());
+        long countStartMillis = System.currentTimeMillis();
         BoolQuery.Builder boolBuilder = new BoolQuery.Builder();
         // 设置查询条件
         setBoolQuery(boolBuilder, dto);
@@ -124,10 +130,14 @@ public class WalletCoinRecordSearch {
                     .ignoreUnavailable(true)
             );
             CountResponse count = client.count(countRequest);
+            log.info("===> ES-Search count coin records. indices={}, userId={}, businessType={}, startTime={}, endTime={}, count={}, countCostMs={}",
+                    indices, dto.getUserId(), dto.getBusinessType(), dto.getStartTime(), dto.getEndTime(),
+                    count.count(), System.currentTimeMillis() - countStartMillis);
             return count.count();
-        } catch (IOException e) {
-            log.error("ES count coin records failed, userId={}, businessType={}, startTime={}, endTime={}, error={}",
-                    dto.getUserId(), dto.getBusinessType(), dto.getStartTime(), dto.getEndTime(), e.getMessage(), e);
+        } catch (IOException | ElasticsearchException e) {
+            log.error("ES count coin records failed, indices={}, userId={}, businessType={}, startTime={}, endTime={}, countCostMs={}, error={}",
+                    indices, dto.getUserId(), dto.getBusinessType(), dto.getStartTime(), dto.getEndTime(),
+                    System.currentTimeMillis() - countStartMillis, e.getMessage(), e);
             return 0L;
         }
     }
@@ -143,6 +153,8 @@ public class WalletCoinRecordSearch {
         long searchStartMillis = System.currentTimeMillis();
         try {
             SearchRequest build = buildSearchRequest(dto).build();
+            // DSL 仅在调试级别输出，避免生产环境的高频查询产生大量日志。
+            log.debug("===> ES-Search coin records DSL. request={}", build);
             SearchResponse<CoinRecordVO> response = client.search(build, CoinRecordVO.class);
 
             List<CoinRecordVO> records = new ArrayList<>();
@@ -152,10 +164,10 @@ public class WalletCoinRecordSearch {
                 }
             }
             long searchCostMs = System.currentTimeMillis() - searchStartMillis;
-            log.info("===> ES-Search parse coin records. userId={}, businessType={}, startTime={}, endTime={}, pageSize={}, lastCreateTime={}, lastId={}, size={}, searchCostMs={}",
+            log.info("===> ES-Search coin records. indices={}, userId={}, businessType={}, startTime={}, endTime={}, pageSize={}, lastCreateTime={}, lastId={}, size={}, esTookMs={}, timedOut={}, searchCostMs={}",
+                    build.index(),
                     dto.getUserId(), dto.getBusinessType(), dto.getStartTime(), dto.getEndTime(), dto.getPageSize(),
-                    dto.getLastCreateTime(), dto.getLastId(), records.size(), searchCostMs);
-            log.info("===> 聚类查询DSL:{}", build);
+                    dto.getLastCreateTime(), dto.getLastId(), records.size(), response.took(), response.timedOut(), searchCostMs);
             return records;
         } catch (IOException | ElasticsearchException e) {
             log.error("ES search coin records failed, userId={}, businessType={}, startTime={}, endTime={}, pageSize={}, lastCreateTime={}, lastId={}, searchCostMs={}, error={}",
@@ -172,7 +184,6 @@ public class WalletCoinRecordSearch {
      * @return 构建好的SearchRequest
      */
     private SearchRequest.Builder buildSearchRequest(SearchCoinRecordDTO dto) {
-        long totalStartMillis = System.currentTimeMillis();
         SearchRequest.Builder searchBuilder = new SearchRequest.Builder();
         searchBuilder.index(EsSearchUtil.getIndices(EsIndexAlias.SANO_WALLET_COIN_RECORD, dto.getStartTime(), dto.getEndTime()));
         // 某天无数据时可能没有物理索引，忽略不存在索引可以避免整个查询失败。
@@ -194,13 +205,11 @@ public class WalletCoinRecordSearch {
                 ));
             }
         } else {
+            // 普通分页同样使用ID作为次级排序，保证同一创建时间的数据跨页顺序稳定。
             EsSearchUtil.setOrder(searchBuilder, "create_time", SortOrder.Desc);
+            EsSearchUtil.setOrder(searchBuilder, "id", SortOrder.Desc);
             EsSearchUtil.setPage(searchBuilder, dto.getPageIndex(), dto.getPageSize());
         }
-        long buildCostMs = System.currentTimeMillis() - totalStartMillis;
-        log.info("===> ES-Search build search request. userId={}, businessType={}, startTime={}, endTime={}, pageSize={}, lastCreateTime={}, lastId={}, buildCostMs={}",
-                dto.getUserId(), dto.getBusinessType(), dto.getStartTime(), dto.getEndTime(),
-                dto.getPageSize(), dto.getLastCreateTime(), dto.getLastId(), buildCostMs);
         return searchBuilder;
     }
 
