@@ -1,0 +1,45 @@
+networks:
+  default:
+    external: true
+    name: sano-net
+
+services:
+  elasticsearch8-test:
+    image: docker.elastic.co/elasticsearch/elasticsearch:8.19.16
+    container_name: elasticsearch8-test
+    restart: unless-stopped
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "100m"
+        max-file: "5"
+    # 测试集群与生产ES部署在同一服务器，限制资源避免影响生产服务。
+    cpus: "2.0"
+    mem_limit: 3g
+    mem_reservation: 2g
+    ulimits:
+      memlock:
+        soft: -1
+        hard: -1
+      nofile:
+        soft: 65535
+        hard: 65535
+    volumes:
+      # 测试ES使用独立宿主机目录，禁止复用生产ES数据目录。
+      - "./data:/usr/share/elasticsearch/data"
+      - "./logs:/usr/share/elasticsearch/logs"
+      - "./config/elasticsearch.yml:/usr/share/elasticsearch/config/elasticsearch.yml:ro"
+      - "./plugins:/usr/share/elasticsearch/plugins"
+      - "./backup:/usr/share/elasticsearch/backup"
+    environment:
+      TZ: Asia/Shanghai
+      LANG: en_US.UTF-8
+      discovery.type: single-node
+      bootstrap.memory_lock: "true"
+      # 测试数据量和查询压力较小，1G堆足够且能为生产ES保留内存。
+      ES_JAVA_OPTS: "-Xms1g -Xmx1g -XX:+UseG1GC -XX:MaxGCPauseMillis=200"
+      ELASTIC_PASSWORD: "es2peter" # elastic账号密码
+    ports:
+      # 宿主机端口仅用于本地IDE或运维检查；容器间访问使用9200/9300。
+      - "9211:9200"
+      - "9311:9300"

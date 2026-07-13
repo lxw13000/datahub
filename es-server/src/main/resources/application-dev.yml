@@ -47,8 +47,8 @@ sano:
     total-size-cap: 2GB
     async-queue-size: 2048
   es:
-#    uris: ${ES_URIS:127.0.0.1:9201}
-    uris: ${ES_URIS:es.fofunlive.net}
+    #    uris: ${ES_URIS:127.0.0.1:9201}
+    uris: ${ES_URIS:es-test.fofunlive.net}
     username: ${ES_USERNAME:elastic}
     password: ${ES_PASSWORD:es2peter}
     socket-timeout: 600000
@@ -61,21 +61,21 @@ sano:
       # 默认关闭；确认ES和数据库配置无误后再打开
       task-enabled: true
       # 每天02:30导入昨天的数据
-      cron: "0 13 17 * * ?"
+      cron: "0 30 2 * * ?"
       # 每轮调度最多运行480分钟，超时后不再启动下一条待执行任务
       max-run-minutes: 5
       # 每轮调度最多拉取100条待执行任务，覆盖多表和少量历史积压场景
       task-fetch-limit: 100
       # 每批读取数据库数量
-      read-batch-size: 8000
+      read-batch-size: 5000
       # Bulk线程数
       worker-count: 4
       # BlockingQueue 队列缓存容量
-      queue-capacity: 30
+      queue-capacity: 10
       # 每次Bulk文档数
-      bulk-actions: 5000
+      bulk-actions: 3000
       # 或每次bulk累计8MB立即发送，单位MB
-      bulk-size-mb: 10
+      bulk-size-mb: 5
       # 最大重试次数
       retry-times: 3
       # Retry等待(ms)
@@ -95,19 +95,19 @@ sano:
 
       notify:
         # 导入任务结束通知总开关，开发环境默认关闭，避免本地调试误发。
-        enabled: ${IMPORT_NOTIFY_ENABLED:true}
+        enabled: ${IMPORT_NOTIFY_ENABLED:false}
         # 是否发送成功任务通知。
-        success-enabled: true
+        success-enabled: false
         # 是否发送失败任务通知。
-        failure-enabled: true
+        failure-enabled: false
         # 是否发送超时暂停任务通知。
-        timeout-enabled: true
+        timeout-enabled: false
         # 通知标题前缀，便于在IM中识别来源。
-        subject-prefix: "[SANO-ES-DEV]"
+        subject-prefix: "[SANO-ES-TEST]"
         channels:
           lark:
             # 飞书/Lark机器人开关。
-            enabled: ${LARK_NOTIFY_ENABLED:true}
+            enabled: ${LARK_NOTIFY_ENABLED:false}
             # 飞书/Lark机器人webhook地址。
             webhook-url: ${LARK_WEBHOOK_URL:https://open.larksuite.com/open-apis/bot/v2/hook/c1af0ddb-8ba5-4dae-a0e2-ecc476bcc5fd}
             # 飞书/Lark机器人签名密钥，未开启签名时留空。
@@ -128,7 +128,7 @@ sano:
           # 导入完成是否删除该表历史索引
           delete-history-index: true
           # 该表历史索引保留天数
-          reserve-days: 4
+          reserve-days: 30
           id-column: id
           dt-column: dt
           # where-sql为空时自动使用 dt = importDate
@@ -140,7 +140,7 @@ sano:
           # 导入完成是否删除该表历史索引
           delete-history-index: true
           # 该表历史索引保留天数
-          reserve-days: 3
+          reserve-days: 30
           id-column: id
           dt-column: dt
           # where-sql为空时自动使用 dt = importDate
@@ -152,7 +152,7 @@ sano:
           # 导入完成是否删除该表历史索引
           delete-history-index: true
           # 该表历史索引保留天数
-          reserve-days: 3
+          reserve-days: 30
           id-column: id
           dt-column: dt
           # where-sql为空时自动使用 dt = importDate

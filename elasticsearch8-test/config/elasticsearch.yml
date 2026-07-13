@@ -1,0 +1,21 @@
+# 测试集群名称，避免在日志和监控中与生产集群混淆。
+cluster.name: "sano-es-test"
+node.name: "elasticsearch8-test"
+
+network.host: 0.0.0.0
+http.port: 9200
+discovery.type: single-node
+
+# 测试环境沿用现有开发连接方式，不启用认证；9211端口应仅向可信网络开放。
+xpack.security.enabled: false
+xpack.security.transport.ssl.enabled: false
+
+# 开发调试工具跨域访问配置。
+http.cors.enabled: true
+http.cors.allow-origin: "*"
+http.cors.allow-headers: Authorization
+
+# 与生产保持一致的请求大小限制，便于复现导入和查询场景。
+http.max_initial_line_length: "8k"
+http.max_header_size: "16k"
+http.max_content_length: 500mb
