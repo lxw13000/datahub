@@ -5,14 +5,19 @@ import co.elastic.clients.elasticsearch._types.ElasticsearchException;
 import co.elastic.clients.elasticsearch._types.FieldValue;
 import co.elastic.clients.elasticsearch._types.SortOrder;
 import co.elastic.clients.elasticsearch._types.aggregations.Aggregate;
+import co.elastic.clients.elasticsearch._types.aggregations.CalendarInterval;
+import co.elastic.clients.elasticsearch._types.aggregations.DateHistogramBucket;
+import co.elastic.clients.elasticsearch._types.aggregations.LongTermsBucket;
 import co.elastic.clients.elasticsearch._types.query_dsl.BoolQuery;
 import co.elastic.clients.elasticsearch.core.CountRequest;
 import co.elastic.clients.elasticsearch.core.CountResponse;
 import co.elastic.clients.elasticsearch.core.SearchRequest;
 import co.elastic.clients.elasticsearch.core.SearchResponse;
 import co.elastic.clients.elasticsearch.core.search.Hit;
+import co.elastic.clients.util.NamedValue;
 import com.tsd.sano.es.controller.sta.dto.SearchCoinRecordDTO;
 import com.tsd.sano.es.controller.sta.vo.CoinRecordVO;
+import com.tsd.sano.es.controller.sta.vo.CoinGiftDailyStatVO;
 import com.tsd.sano.es.controller.sta.vo.WeekStatVO;
 import com.tsd.sano.es.core.util.TimeUtils;
 import com.tsd.sano.es.search.util.EsSearchUtil;
@@ -22,6 +27,8 @@ import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
 
 import java.io.IOException;
+import java.math.BigDecimal;
+import java.math.RoundingMode;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
@@ -35,6 +42,15 @@ import java.util.Map;
  */
 @Service
 public class WalletCoinRecordSearch {
+
+    /** 单位换算：一美元对应的金币数。 */
+    private static final BigDecimal TOKENS_PER_DOLLAR = BigDecimal.valueOf(10_000L);
+
+    /** 主播分层比例。 */
+    private static final BigDecimal HOST_RATIO = BigDecimal.valueOf(0.02D);
+
+    /** 用户去重聚合精度阈值，超过阈值后 ES 仍可能存在小幅近似误差。 */
+    private static final int USER_COUNT_PRECISION_THRESHOLD = 40_000;
 
     private static final Logger log = LoggerFactory.getLogger(WalletCoinRecordSearch.class);
 
@@ -105,6 +121,137 @@ public class WalletCoinRecordSearch {
             log.error("ES search wallet coin week stat failed, indices={}, roomCount={}, startTime={}, endTime={}, searchCostMs={}, error={}",
                     indices, roomIds.size(), startTime, endTime, System.currentTimeMillis() - searchStartMillis, e.getMessage(), e);
             return new WeekStatVO();
+        }
+    }
+
+    /**
+     * 按天统计礼物相关金币流水。
+     *
+     * <p>幸运礼物消费为 business_type=11，中奖返奖为 business_type=16，Jackpot 中奖为 business_type=17。</p>
+     *
+     * @param startDate 开始业务日期，格式 yyyy-MM-dd
+     * @param endDate   结束业务日期，格式 yyyy-MM-dd
+     * @return 每日统计结果
+     */
+    public List<CoinGiftDailyStatVO> coinGiftDailyStat(String startDate, String endDate) {
+        String startTime = startDate + " 00:00:00";
+        String endTime = endDate + " 23:59:59";
+        List<String> indices = EsSearchUtil.getIndices(EsIndexAlias.SANO_WALLET_COIN_RECORD, startTime, endTime);
+        long searchStartMillis = System.currentTimeMillis();
+        SearchRequest.Builder searchBuilder = new SearchRequest.Builder();
+        searchBuilder.index(indices).ignoreUnavailable(true).size(0);
+
+        BoolQuery.Builder boolBuilder = new BoolQuery.Builder();
+        // 使用 dt 字段过滤完整业务日期，避免 create_time 的时分秒影响日统计边界。
+        EsSearchUtil.setDateEQ(boolBuilder, "dt", "yyyy-MM-dd", startDate, endDate);
+        // 仅保留幸运礼物消费、中奖和 Jackpot 中奖三类记录，减少无关流水参与聚合。
+        boolBuilder.must(EsSearchUtil.getTermsOr("business_type", List.of(11, 16, 17)));
+        searchBuilder.query(boolBuilder.build()._toQuery());
+
+        // 每个业务日期独立聚合消费、返奖和消费金额 Top3 的礼物。
+        searchBuilder.aggregations("daily", a -> a
+                .dateHistogram(d -> d.field("dt").calendarInterval(CalendarInterval.Day).format("yyyy-MM-dd"))
+                .aggregations("consume", sub -> sub
+                        // 业务类型已定义消费含义，只统计幸运礼物消费。
+                        .filter(EsSearchUtil.getTerm("business_type", 11))
+                        .aggregations("user_count", metric -> metric.cardinality(c -> c
+                                .field("user_id").precisionThreshold(USER_COUNT_PRECISION_THRESHOLD)))
+                        .aggregations("tokens", metric -> metric.sum(s -> s.field("tokens")))
+                        .aggregations("amount", metric -> metric.sum(s -> s.field("amount")))
+                        .aggregations("top_props", metric -> metric.terms(t -> t
+                                .field("prop_id")
+                                .size(3)
+                                .order(NamedValue.of("tokens", SortOrder.Desc)))
+                                .aggregations("tokens", value -> value.sum(s -> s.field("tokens")))
+                                .aggregations("amount", value -> value.sum(s -> s.field("amount")))))
+                .aggregations("reward", sub -> sub
+                        // 返奖只统计幸运礼物中奖，不包含 Jackpot 中奖。
+                        .filter(EsSearchUtil.getTerm("business_type", 16))
+                        .aggregations("tokens", metric -> metric.sum(s -> s.field("tokens"))))
+                .aggregations("jackpot", sub -> sub
+                        // Jackpot 金额使用实际中奖流水，而非按消费金额比例估算。
+                        .filter(EsSearchUtil.getTerm("business_type", 17))
+                        .aggregations("tokens", metric -> metric.sum(s -> s.field("tokens")))));
+
+        try {
+            SearchResponse<Void> response = client.search(searchBuilder.build(), Void.class);
+            List<CoinGiftDailyStatVO> stats = new ArrayList<>();
+            List<DateHistogramBucket> buckets = response.aggregations().get("daily").dateHistogram().buckets().array();
+            for (DateHistogramBucket bucket : buckets) {
+                Map<String, Aggregate> aggregations = bucket.aggregations();
+                Map<String, Aggregate> consume = aggregations.get("consume").filter().aggregations();
+                Map<String, Aggregate> reward = aggregations.get("reward").filter().aggregations();
+                Map<String, Aggregate> jackpot = aggregations.get("jackpot").filter().aggregations();
+                long userCount = Math.round(consume.get("user_count").cardinality().value());
+                long consumeTokens = Math.round(consume.get("tokens").sum().value());
+                long consumeAmount = Math.round(consume.get("amount").sum().value());
+                long rewardTokens = Math.round(reward.get("tokens").sum().value());
+                long jackpotTokens = Math.round(jackpot.get("tokens").sum().value());
+                // 全部金额先按原始 tokens 计算再保留小数，和 MySQL ROUND 口径保持一致。
+                BigDecimal consumeTokensValue = BigDecimal.valueOf(consumeTokens);
+                BigDecimal rewardTokensValue = BigDecimal.valueOf(rewardTokens);
+                BigDecimal jackpotTokensValue = BigDecimal.valueOf(jackpotTokens);
+                BigDecimal consumeDollar = consumeTokensValue.divide(TOKENS_PER_DOLLAR, 3, RoundingMode.HALF_UP);
+                BigDecimal rewardDollar = rewardTokensValue.divide(TOKENS_PER_DOLLAR, 3, RoundingMode.HALF_UP);
+                BigDecimal hostDollar = consumeTokensValue.multiply(HOST_RATIO)
+                        .divide(TOKENS_PER_DOLLAR, 3, RoundingMode.HALF_UP);
+                BigDecimal jackpotDollar = jackpotTokensValue.divide(TOKENS_PER_DOLLAR, 3, RoundingMode.HALF_UP);
+
+                CoinGiftDailyStatVO stat = new CoinGiftDailyStatVO();
+                stat.setDt(bucket.keyAsString());
+                stat.setUserCount(userCount);
+                stat.setConsumeAmount(consumeAmount);
+                stat.setConsumeDollar(consumeDollar);
+                stat.setRewardDollar(rewardDollar);
+                stat.setHostDollar(hostDollar);
+                stat.setJackpotDollar(jackpotDollar);
+                stat.setNetDollar(consumeTokensValue.subtract(rewardTokensValue)
+                        .subtract(consumeTokensValue.multiply(HOST_RATIO))
+                        .subtract(jackpotTokensValue)
+                        .divide(TOKENS_PER_DOLLAR, 3, RoundingMode.HALF_UP));
+                stat.setAvgAmount(userCount == 0L ? BigDecimal.ZERO.setScale(3)
+                        : BigDecimal.valueOf(consumeAmount).divide(BigDecimal.valueOf(userCount), 3, RoundingMode.HALF_UP));
+                stat.setAvgDollar(userCount == 0L ? BigDecimal.ZERO.setScale(3)
+                        : consumeTokensValue.divide(BigDecimal.valueOf(userCount).multiply(TOKENS_PER_DOLLAR), 3, RoundingMode.HALF_UP));
+
+                long top3Tokens = 0L;
+                long top3Amount = 0L;
+                List<LongTermsBucket> topProps = consume.get("top_props").lterms().buckets().array();
+                for (int i = 0; i < topProps.size(); i++) {
+                    LongTermsBucket prop = topProps.get(i);
+                    long tokens = Math.round(prop.aggregations().get("tokens").sum().value());
+                    long amount = Math.round(prop.aggregations().get("amount").sum().value());
+                    top3Tokens += tokens;
+                    top3Amount += amount;
+                    if (i == 0) {
+                        stat.setTop1Id(prop.key());
+                        stat.setTop1Dollar(BigDecimal.valueOf(tokens).divide(TOKENS_PER_DOLLAR, 3, RoundingMode.HALF_UP));
+                        stat.setTop1Amount(amount);
+                    } else if (i == 1) {
+                        stat.setTop2Id(prop.key());
+                        stat.setTop2Dollar(BigDecimal.valueOf(tokens).divide(TOKENS_PER_DOLLAR, 3, RoundingMode.HALF_UP));
+                        stat.setTop2Amount(amount);
+                    } else {
+                        stat.setTop3Id(prop.key());
+                        stat.setTop3Dollar(BigDecimal.valueOf(tokens).divide(TOKENS_PER_DOLLAR, 3, RoundingMode.HALF_UP));
+                        stat.setTop3Amount(amount);
+                    }
+                }
+                stat.setTop3TotalDollar(BigDecimal.valueOf(top3Tokens).divide(TOKENS_PER_DOLLAR, 3, RoundingMode.HALF_UP));
+                stat.setTop3TotalAmount(top3Amount);
+                stat.setTop3Ratio(consumeTokens == 0L ? BigDecimal.ZERO.setScale(2)
+                        : BigDecimal.valueOf(top3Tokens).multiply(BigDecimal.valueOf(100L))
+                        .divide(BigDecimal.valueOf(consumeTokens), 2, RoundingMode.HALF_UP));
+                stats.add(stat);
+            }
+            log.info("===> ES-Search coin gift daily stat. indices={}, startDate={}, endDate={}, size={}, esTookMs={}, timedOut={}, searchCostMs={}",
+                    indices, startDate, endDate, stats.size(), response.took(), response.timedOut(),
+                    System.currentTimeMillis() - searchStartMillis);
+            return stats;
+        } catch (IOException | ElasticsearchException e) {
+            log.error("ES search coin gift daily stat failed, indices={}, startDate={}, endDate={}, searchCostMs={}, error={}",
+                    indices, startDate, endDate, System.currentTimeMillis() - searchStartMillis, e.getMessage(), e);
+            return new ArrayList<>();
         }
     }
 

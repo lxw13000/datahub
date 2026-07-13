@@ -1,9 +1,11 @@
 package com.tsd.sano.es.controller.sta;
 
 import com.tsd.sano.es.controller.sta.dto.AppCoinRecordDTO;
+import com.tsd.sano.es.controller.sta.dto.CoinGiftDailyStatDTO;
 import com.tsd.sano.es.controller.sta.dto.SatCoinWeekDTO;
 import com.tsd.sano.es.controller.sta.dto.SearchCoinRecordDTO;
 import com.tsd.sano.es.controller.sta.vo.CoinRecordVO;
+import com.tsd.sano.es.controller.sta.vo.CoinGiftDailyStatVO;
 import com.tsd.sano.es.controller.sta.vo.WeekStatVO;
 import com.tsd.sano.es.core.result.ResultVO;
 import com.tsd.sano.es.search.WalletCoinRecordSearch;
@@ -47,6 +49,27 @@ public class WalletCoinController {
         log.info("===> ES-Search api success. api=staCoinWeek, roomCount={}, startTime={}, endTime={}, costMs={}, stat={}",
                 weekDTO.getRoomIds().size(), weekDTO.getStartTime(), weekDTO.getEndTime(), System.currentTimeMillis() - startMillis, stat);
         return ResultVO.success(stat);
+    }
+
+    /**
+     * 按业务日期统计金币礼物消费、返奖及每日消费 Top3 礼物。
+     *
+     * <p>消费统计使用幸运礼物消费，返奖和 Jackpot 中奖分别统计。</p>
+     *
+     * @param statDTO 查询日期范围
+     * @return 每日统计结果
+     */
+    @PostMapping("/coinGiftDailyStat")
+    public ResultVO<List<CoinGiftDailyStatVO>> coinGiftDailyStat(@RequestBody CoinGiftDailyStatDTO statDTO) {
+        long startMillis = System.currentTimeMillis();
+        log.info("===> ES-Search api start. api=coinGiftDailyStat, startDate={}, endDate={}",
+                statDTO.getStartDate(), statDTO.getEndDate());
+
+        List<CoinGiftDailyStatVO> stats = walletCoinRecordSearch.coinGiftDailyStat(
+                statDTO.getStartDate(), statDTO.getEndDate());
+        log.info("===> ES-Search api success. api=coinGiftDailyStat, startDate={}, endDate={}, size={}, costMs={}",
+                statDTO.getStartDate(), statDTO.getEndDate(), stats.size(), System.currentTimeMillis() - startMillis);
+        return ResultVO.success(stats);
     }
 
     /**
