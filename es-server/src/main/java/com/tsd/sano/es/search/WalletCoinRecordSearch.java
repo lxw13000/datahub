@@ -16,11 +16,7 @@ import co.elastic.clients.elasticsearch.core.SearchResponse;
 import co.elastic.clients.elasticsearch.core.search.Hit;
 import co.elastic.clients.util.NamedValue;
 import com.tsd.sano.es.controller.coin.dto.SearchCoinRecordDTO;
-import com.tsd.sano.es.controller.coin.vo.CoinRecordVO;
-import com.tsd.sano.es.controller.coin.vo.CoinGiftDailyStatVO;
-import com.tsd.sano.es.controller.coin.vo.CoinGiftDailyPropStatVO;
-import com.tsd.sano.es.controller.coin.vo.CoinGiftPropConsumeVO;
-import com.tsd.sano.es.controller.coin.vo.WeekStatVO;
+import com.tsd.sano.es.controller.coin.vo.*;
 import com.tsd.sano.es.core.util.TimeUtils;
 import com.tsd.sano.es.search.util.EsSearchUtil;
 import org.apache.commons.lang3.StringUtils;
@@ -45,13 +41,19 @@ import java.util.Map;
 @Service
 public class WalletCoinRecordSearch {
 
-    /** 单位换算：一美元对应的金币数。 */
+    /**
+     * 单位换算：一美元对应的金币数。
+     */
     private static final BigDecimal TOKENS_PER_DOLLAR = BigDecimal.valueOf(10_000L);
 
-    /** 主播分层比例。 */
+    /**
+     * 主播分层比例。
+     */
     private static final BigDecimal HOST_RATIO = BigDecimal.valueOf(0.02D);
 
-    /** 用户去重聚合精度阈值，超过阈值后 ES 仍可能存在小幅近似误差。 */
+    /**
+     * 用户去重聚合精度阈值，超过阈值后 ES 仍可能存在小幅近似误差。
+     */
     private static final int USER_COUNT_PRECISION_THRESHOLD = 40_000;
 
     private static final Logger log = LoggerFactory.getLogger(WalletCoinRecordSearch.class);
@@ -161,9 +163,9 @@ public class WalletCoinRecordSearch {
                         .aggregations("tokens", metric -> metric.sum(s -> s.field("tokens")))
                         .aggregations("amount", metric -> metric.sum(s -> s.field("amount")))
                         .aggregations("top_props", metric -> metric.terms(t -> t
-                                .field("prop_id")
-                                .size(3)
-                                .order(NamedValue.of("tokens", SortOrder.Desc)))
+                                        .field("prop_id")
+                                        .size(3)
+                                        .order(NamedValue.of("tokens", SortOrder.Desc)))
                                 .aggregations("tokens", value -> value.sum(s -> s.field("tokens")))
                                 .aggregations("amount", value -> value.sum(s -> s.field("amount")))))
                 .aggregations("reward", sub -> sub
@@ -211,9 +213,9 @@ public class WalletCoinRecordSearch {
                         .subtract(consumeTokensValue.multiply(HOST_RATIO))
                         .subtract(jackpotTokensValue)
                         .divide(TOKENS_PER_DOLLAR, 3, RoundingMode.HALF_UP));
-                stat.setAvgAmount(userCount == 0L ? BigDecimal.ZERO.setScale(3)
+                stat.setAvgAmount(userCount == 0L ? BigDecimal.ZERO.setScale(3, RoundingMode.HALF_UP)
                         : BigDecimal.valueOf(consumeAmount).divide(BigDecimal.valueOf(userCount), 3, RoundingMode.HALF_UP));
-                stat.setAvgDollar(userCount == 0L ? BigDecimal.ZERO.setScale(3)
+                stat.setAvgDollar(userCount == 0L ? BigDecimal.ZERO.setScale(3, RoundingMode.HALF_UP)
                         : consumeTokensValue.divide(BigDecimal.valueOf(userCount).multiply(TOKENS_PER_DOLLAR), 3, RoundingMode.HALF_UP));
 
                 long top3Tokens = 0L;
@@ -241,7 +243,7 @@ public class WalletCoinRecordSearch {
                 }
                 stat.setTop3TotalDollar(BigDecimal.valueOf(top3Tokens).divide(TOKENS_PER_DOLLAR, 3, RoundingMode.HALF_UP));
                 stat.setTop3TotalAmount(top3Amount);
-                stat.setTop3Ratio(consumeTokens == 0L ? BigDecimal.ZERO.setScale(2)
+                stat.setTop3Ratio(consumeTokens == 0L ? BigDecimal.ZERO.setScale(2, RoundingMode.HALF_UP)
                         : BigDecimal.valueOf(top3Tokens).multiply(BigDecimal.valueOf(100L))
                         .divide(BigDecimal.valueOf(consumeTokens), 2, RoundingMode.HALF_UP));
                 stats.add(stat);
@@ -281,9 +283,9 @@ public class WalletCoinRecordSearch {
         searchBuilder.aggregations("daily", aggregation -> aggregation
                 .dateHistogram(histogram -> histogram.field("dt").calendarInterval(CalendarInterval.Day).format("yyyy-MM-dd"))
                 .aggregations("props", sub -> sub.terms(terms -> terms
-                        .field("prop_id")
-                        .size(20)
-                        .order(NamedValue.of("tokens", SortOrder.Desc)))
+                                .field("prop_id")
+                                .size(20)
+                                .order(NamedValue.of("tokens", SortOrder.Desc)))
                         .aggregations("tokens", value -> value.sum(sum -> sum.field("tokens")))));
 
         try {
@@ -400,12 +402,13 @@ public class WalletCoinRecordSearch {
 
         setBoolQuery(boolBuilder, dto);
         searchBuilder.query(boolBuilder.build()._toQuery());
+        // 深度分页和普通分页均以创建时间、ID 倒序，保证翻页顺序稳定
+        EsSearchUtil.setOrder(searchBuilder, "create_time", SortOrder.Desc);
+        EsSearchUtil.setOrder(searchBuilder, "id", SortOrder.Desc);
         // 搜索类型，0:深度分页，1:普通分页（普通分页最多查询10000条数据，超过10000条数据请使用深度分页
         if (dto.getSearchType() == 0) {
-            // search_after深分页必须和排序字段一一对应，顺序也必须保持一致。
-            EsSearchUtil.setOrder(searchBuilder, "create_time", SortOrder.Desc);
-            EsSearchUtil.setOrder(searchBuilder, "id", SortOrder.Desc);
             searchBuilder.size(dto.getPageSize());
+            // search_after深分页必须和排序字段一一对应，顺序也必须保持一致。
             if (StringUtils.isNotBlank(dto.getLastCreateTime()) && dto.getLastId() != null) {
                 searchBuilder.searchAfter(List.of(
                         FieldValue.of(dto.getLastCreateTime()),
@@ -413,9 +416,6 @@ public class WalletCoinRecordSearch {
                 ));
             }
         } else {
-            // 普通分页同样使用ID作为次级排序，保证同一创建时间的数据跨页顺序稳定。
-            EsSearchUtil.setOrder(searchBuilder, "create_time", SortOrder.Desc);
-            EsSearchUtil.setOrder(searchBuilder, "id", SortOrder.Desc);
             EsSearchUtil.setPage(searchBuilder, dto.getPageIndex(), dto.getPageSize());
         }
         return searchBuilder;
