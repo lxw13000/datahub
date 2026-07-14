@@ -1,13 +1,13 @@
-package com.tsd.sano.es.controller.sta;
+package com.tsd.sano.es.controller.coin;
 
-import com.tsd.sano.es.controller.sta.dto.AppCoinRecordDTO;
-import com.tsd.sano.es.controller.sta.dto.CoinGiftDailyStatDTO;
-import com.tsd.sano.es.controller.sta.dto.SatCoinWeekDTO;
-import com.tsd.sano.es.controller.sta.dto.SearchCoinRecordDTO;
-import com.tsd.sano.es.controller.sta.vo.CoinRecordVO;
-import com.tsd.sano.es.controller.sta.vo.CoinGiftDailyStatVO;
-import com.tsd.sano.es.controller.sta.vo.CoinGiftDailyPropStatVO;
-import com.tsd.sano.es.controller.sta.vo.WeekStatVO;
+import com.tsd.sano.es.controller.coin.dto.AppCoinRecordDTO;
+import com.tsd.sano.es.controller.coin.dto.CoinGiftDailyStatDTO;
+import com.tsd.sano.es.controller.coin.dto.SatCoinWeekDTO;
+import com.tsd.sano.es.controller.coin.dto.SearchCoinRecordDTO;
+import com.tsd.sano.es.controller.coin.vo.CoinRecordVO;
+import com.tsd.sano.es.controller.coin.vo.CoinGiftDailyStatVO;
+import com.tsd.sano.es.controller.coin.vo.CoinGiftDailyPropStatVO;
+import com.tsd.sano.es.controller.coin.vo.WeekStatVO;
 import com.tsd.sano.es.core.result.ResultVO;
 import com.tsd.sano.es.search.WalletCoinRecordSearch;
 import lombok.RequiredArgsConstructor;

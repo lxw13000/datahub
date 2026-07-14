@@ -1,4 +1,4 @@
-package com.tsd.sano.es.controller.sta.vo;
+package com.tsd.sano.es.controller.coin.vo;
 
 import lombok.Data;
 

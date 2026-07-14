@@ -1,17 +1,31 @@
-package com.tsd.sano.es.controller.sta.dto;
+package com.tsd.sano.es.controller.coin.dto;
 
 import lombok.Data;
 
 /**
- * app个人中心金币记录查询参数
+ * 金币记录查询参数
  */
 @Data
-public class AppCoinRecordDTO {
+public class SearchCoinRecordDTO {
 
     /**
      * 用户id
      */
     private Long userId;
+
+    /**
+     * 对方用户ID。
+     */
+    private Integer taUserId;
+
+    /**
+     * 房间ID。
+     */
+    private Integer roomId;
+    /**
+     * 礼物ID。
+     */
+    private Integer propId;
 
     /**
      * 业务类型
@@ -27,6 +41,16 @@ public class AppCoinRecordDTO {
      * 结束时间，格式：yyyy-MM-dd HH:mm:ss。
      */
     private String endTime;
+
+    /**
+     * 搜索类型，0:深度分页，1:普通分页（普通分页最多查询10000条数据，超过10000条数据请使用深度分页）
+     */
+    private Integer searchType;
+
+    /**
+     * 页码索引，从1开始
+     */
+    private Integer pageIndex;
 
     /**
      * 分页大小

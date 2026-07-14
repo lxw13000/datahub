@@ -172,7 +172,7 @@
         </logger>
 
         <!-- 查询API日志单独落文件，同时继续向 root 传递，便于开发控制台观察。 -->
-        <logger name="com.tsd.sano.es.controller.sta" level="DEBUG" additivity="true">
+        <logger name="com.tsd.sano.es.controller.coin" level="DEBUG" additivity="true">
             <appender-ref ref="ASYNC_SEARCH_API_FILE"/>
         </logger>
         <logger name="com.tsd.sano.es.search" level="DEBUG" additivity="true">
@@ -214,7 +214,7 @@
         </logger>
 
         <!-- 查询API日志单独落文件，同时继续向 root 传递，便于统一排查。 -->
-        <logger name="com.tsd.sano.es.controller.sta" level="INFO" additivity="true">
+        <logger name="com.tsd.sano.es.controller.coin" level="INFO" additivity="true">
             <appender-ref ref="ASYNC_SEARCH_API_FILE"/>
         </logger>
         <logger name="com.tsd.sano.es.search" level="INFO" additivity="true">
