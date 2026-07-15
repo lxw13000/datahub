@@ -10,6 +10,7 @@ import co.elastic.clients.elasticsearch.core.CountResponse;
 import co.elastic.clients.elasticsearch.core.SearchRequest;
 import co.elastic.clients.elasticsearch.core.SearchResponse;
 import co.elastic.clients.elasticsearch.core.search.Hit;
+import com.tsd.sano.es.controller.diamond.dto.SatDiamond7DayDTO;
 import com.tsd.sano.es.controller.diamond.dto.SearchDiamondRecordDTO;
 import com.tsd.sano.es.controller.diamond.vo.DiamondRecordVO;
 import com.tsd.sano.es.core.util.TimeUtils;
@@ -107,6 +108,43 @@ public class WalletDiamondRecordSearch {
                     dto.getUserId(), dto.getBusinessType(), dto.getStartTime(), dto.getEndTime(), dto.getPageSize(),
                     dto.getLastCreateTime(), dto.getLastId(), System.currentTimeMillis() - searchStartMillis, e.getMessage(), e);
             return new ArrayList<>();
+        }
+    }
+
+    /**
+     * 指定用户近七天主播直播收益
+     *
+     * @param dto 参数
+     * @return java.lang.Long 收益数值
+     * @author lxw
+     * @date 2026/7/14 20:12
+     **/
+    public Long sevenDaysLiveIncome(SatDiamond7DayDTO dto) {
+
+        List<String> indices = EsSearchUtil.getIndices(EsIndexAlias.SANO_WALLET_DIAMOND_RECORD, dto.getStartTime(), dto.getEndTime());
+        long countStartMillis = System.currentTimeMillis();
+        BoolQuery.Builder boolBuilder = new BoolQuery.Builder();
+        // 用户ID
+        boolBuilder.must(EsSearchUtil.getTerm("user_id", dto.getUserId()));
+        // 时间字段使用 create_time，查询工具会按传入格式生成 ES date range
+        EsSearchUtil.setDateEQ(boolBuilder, "create_time", TimeUtils.BASIC, dto.getStartTime(), dto.getEndTime());
+        // 直播收入业务类型：2，收到豪华礼物，5.房主豪华礼物分账，12.收到幸运礼物，23.房主游戏分账
+        boolBuilder.must(EsSearchUtil.getTermsOr("business_type", List.of(2, 5, 12, 23)));
+        try {
+            CountResponse count = client.count(CountRequest.of(request -> request
+                    .index(indices)
+                    .query(boolBuilder.build()._toQuery())
+                    // 某天无数据时可能没有物理索引，忽略不存在索引可以避免整个查询失败
+                    .ignoreUnavailable(true)));
+            log.info("===> ES-Search sevenDaysLiveIncome. indices={}, userId={},  startTime={}, endTime={}, count={}, countCostMs={}",
+                    indices, dto.getUserId(), dto.getStartTime(), dto.getEndTime(),
+                    count.count(), System.currentTimeMillis() - countStartMillis);
+            return count.count();
+        } catch (IOException | ElasticsearchException e) {
+            log.error("ES sevenDaysLiveIncome failed, indices={}, userId={}, startTime={}, endTime={}, countCostMs={}, error={}",
+                    indices, dto.getUserId(), dto.getStartTime(), dto.getEndTime(),
+                    System.currentTimeMillis() - countStartMillis, e.getMessage(), e);
+            return 0L;
         }
     }
 

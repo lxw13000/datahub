@@ -1,6 +1,7 @@
 package com.tsd.sano.es.controller.diamond;
 
 import com.tsd.sano.es.controller.diamond.dto.AppDiamondRecordDTO;
+import com.tsd.sano.es.controller.diamond.dto.SatDiamond7DayDTO;
 import com.tsd.sano.es.controller.diamond.dto.SearchDiamondRecordDTO;
 import com.tsd.sano.es.controller.diamond.vo.DiamondRecordVO;
 import com.tsd.sano.es.core.result.ResultVO;
@@ -32,6 +33,7 @@ public class WalletDiamondController {
      * 钻石记录 ES 查询服务
      */
     private final WalletDiamondRecordSearch walletDiamondRecordSearch;
+
 
     /**
      * 查询 App 个人钻石记录
@@ -79,4 +81,20 @@ public class WalletDiamondController {
         List<DiamondRecordVO> records = walletDiamondRecordSearch.list(recordDTO);
         return ResultVO.success(records);
     }
+
+
+    /**
+     * 近7天直播收入
+     *
+     * @param dto 参数
+     * @return com.tsd.sano.es.core.result.ResultVO<java.lang.Long>
+     * @author lxw
+     * @date 2026/7/14 20:04
+     **/
+    @PostMapping("/sevenDaysLiveIncome")
+    public ResultVO<Long> sevenDaysLiveIncome(@RequestBody SatDiamond7DayDTO dto) {
+        Long count = walletDiamondRecordSearch.sevenDaysLiveIncome(dto);
+        return ResultVO.success(count);
+    }
+
 }
