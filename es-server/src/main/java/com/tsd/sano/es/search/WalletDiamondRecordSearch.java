@@ -122,7 +122,7 @@ public class WalletDiamondRecordSearch {
     public Long sevenDaysLiveIncome(SatDiamond7DayDTO dto) {
 
         List<String> indices = EsSearchUtil.getIndices(EsIndexAlias.SANO_WALLET_DIAMOND_RECORD, dto.getStartTime(), dto.getEndTime());
-        long countStartMillis = System.currentTimeMillis();
+        long searchStartMillis = System.currentTimeMillis();
         BoolQuery.Builder boolBuilder = new BoolQuery.Builder();
         // 用户ID
         boolBuilder.must(EsSearchUtil.getTerm("user_id", dto.getUserId()));
@@ -131,19 +131,23 @@ public class WalletDiamondRecordSearch {
         // 直播收入业务类型：2，收到豪华礼物，5.房主豪华礼物分账，12.收到幸运礼物，23.房主游戏分账
         boolBuilder.must(EsSearchUtil.getTermsOr("business_type", List.of(2, 5, 12, 23)));
         try {
-            CountResponse count = client.count(CountRequest.of(request -> request
+            SearchRequest request = SearchRequest.of(search -> search
                     .index(indices)
                     .query(boolBuilder.build()._toQuery())
+                    .size(0)
                     // 某天无数据时可能没有物理索引，忽略不存在索引可以避免整个查询失败
-                    .ignoreUnavailable(true)));
-            log.info("===> ES-Search sevenDaysLiveIncome. indices={}, userId={},  startTime={}, endTime={}, count={}, countCostMs={}",
+                    .ignoreUnavailable(true)
+                    .aggregations("live_income", aggregation -> aggregation.sum(sum -> sum.field("tokens"))));
+            SearchResponse<Void> response = client.search(request, Void.class);
+            long liveIncome = Math.round(response.aggregations().get("live_income").sum().value());
+            log.info("===> ES-Search sevenDaysLiveIncome. indices={}, userId={}, startTime={}, endTime={}, liveIncome={}, esTookMs={}, timedOut={}, searchCostMs={}",
                     indices, dto.getUserId(), dto.getStartTime(), dto.getEndTime(),
-                    count.count(), System.currentTimeMillis() - countStartMillis);
-            return count.count();
+                    liveIncome, response.took(), response.timedOut(), System.currentTimeMillis() - searchStartMillis);
+            return liveIncome;
         } catch (IOException | ElasticsearchException e) {
-            log.error("ES sevenDaysLiveIncome failed, indices={}, userId={}, startTime={}, endTime={}, countCostMs={}, error={}",
+            log.error("ES sevenDaysLiveIncome failed, indices={}, userId={}, startTime={}, endTime={}, searchCostMs={}, error={}",
                     indices, dto.getUserId(), dto.getStartTime(), dto.getEndTime(),
-                    System.currentTimeMillis() - countStartMillis, e.getMessage(), e);
+                    System.currentTimeMillis() - searchStartMillis, e.getMessage(), e);
             return 0L;
         }
     }
