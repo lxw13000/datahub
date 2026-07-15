@@ -128,8 +128,8 @@ public class WalletDiamondRecordSearch {
         boolBuilder.must(EsSearchUtil.getTerm("user_id", dto.getUserId()));
         // 时间字段使用 create_time，查询工具会按传入格式生成 ES date range
         EsSearchUtil.setDateEQ(boolBuilder, "create_time", TimeUtils.BASIC, dto.getStartTime(), dto.getEndTime());
-        // 直播收入业务类型：2，收到豪华礼物，5.房主豪华礼物分账，12.收到幸运礼物，23.房主游戏分账
-        boolBuilder.must(EsSearchUtil.getTermsOr("business_type", List.of(2, 5, 12, 23)));
+        // 直播收入业务类型：2，收到豪华礼物，12.收到幸运礼物，23.房主游戏分账
+        boolBuilder.must(EsSearchUtil.getTermsOr("business_type", List.of(2, 12, 23)));
         try {
             SearchRequest request = SearchRequest.of(search -> search
                     .index(indices)
