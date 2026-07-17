@@ -42,7 +42,7 @@ public class EsImportConfig {
     private LocalDate importDate;
 
     /**
-     * 可选SQL条件；为空时按dtColumn = importDate过滤。
+     * 可选SQL条件；为空时根据dtColumnType按业务日期生成查询条件。
      */
     private String whereSql;
 
@@ -51,18 +51,18 @@ public class EsImportConfig {
      */
     private String idColumn = "id";
 
-        /**
-         * 分区日期字段，whereSql为空时按该字段做T+1过滤。
-         */
-        private String dtColumn = "dt";
-
-        /**
-         * 分区日期字段类型，只支持DATE或DATETIME。
-         */
-        private String dtColumnType = "DATE";
+    /**
+     * 分区日期字段，whereSql为空时按该字段做T+1过滤。
+     */
+    private String dtColumn = "dt";
 
     /**
-     * 起始游标ID，续跑时从last_success_id之后继续读取。
+     * 分区日期字段类型，只支持DATE或DATETIME。
+     */
+    private String dtColumnType = "DATE";
+
+    /**
+     * 起始游标ID，续跑时从任务保存的连续安全断点last_success_id之后继续读取。
      */
     private long startId;
 

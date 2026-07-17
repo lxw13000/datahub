@@ -7,10 +7,21 @@ import org.springframework.scheduling.concurrent.ThreadPoolTaskExecutor;
 
 import java.util.concurrent.Executor;
 
+/**
+ * ES后台任务使用的异步执行器配置。
+ *
+ * <p>所有server-mode注册同一执行器；query模式只是不提交同步任务。
+ * 定时调度由应用全局启用，具体任务在执行入口检查运行模式和功能开关。</p>
+ */
 @Configuration
 @EnableAsync
 public class AsyncConfig {
 
+    /**
+     * 创建 T+1 人工任务和任务分发使用的后台执行器。
+     *
+     * @return 已初始化的导入任务执行器
+     */
     @Bean(name = "esImportExecutor")
     public Executor esImportExecutor() {
         ThreadPoolTaskExecutor executor = new ThreadPoolTaskExecutor();
@@ -23,6 +34,4 @@ public class AsyncConfig {
         executor.initialize();
         return executor;
     }
-
-
 }

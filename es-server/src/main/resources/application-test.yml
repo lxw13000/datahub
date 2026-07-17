@@ -40,6 +40,8 @@ logging:
     com.zaxxer.hikari: INFO
 
 sano:
+  # all与query都开放查询；query只关闭T+1和未来polling同步能力。
+  server-mode: ${SANO_SERVER_MODE:all}
   log:
     # 开发环境保留周期短，便于本地排查时快速滚动。
     max-file-size: 50MB
@@ -57,12 +59,47 @@ sano:
     max-conn-total: 100
     max-conn-per-route: 20
 
-    import:
-      # 默认关闭；确认ES和数据库配置无误后再打开
-      task-enabled: true
+  notify:
+    # 同步任务通知总开关，测试环境默认关闭，避免调试误发。
+    enabled: ${SANO_NOTIFY_ENABLED:false}
+    # 飞书/Lark机器人配置；关闭或webhook地址为空时跳过该通道。
+    lark:
+      # 飞书/Lark机器人开关。
+      enabled: ${LARK_NOTIFY_ENABLED:false}
+      # 飞书/Lark机器人webhook地址。
+      webhook-url: ${LARK_WEBHOOK_URL:https://open.larksuite.com/open-apis/bot/v2/hook/c1af0ddb-8ba5-4dae-a0e2-ecc476bcc5fd}
+      # 机器人签名密钥；未启用签名时留空。
+      secret: ${LARK_WEBHOOK_SECRET:6MKCorKya6KxX99qxqaKwh}
+    # 钉钉机器人配置；关闭或webhook地址为空时跳过该通道。
+    dingtalk:
+      # 钉钉机器人开关。
+      enabled: ${DINGTALK_NOTIFY_ENABLED:false}
+      # 钉钉机器人webhook地址。
+      webhook-url: ${DINGTALK_WEBHOOK_URL:}
+      # 机器人签名密钥；未启用签名时留空。
+      secret: ${DINGTALK_WEBHOOK_SECRET:}
+
+  import:
+    # T+1与未来polling共用的写入资源和安全排空参数。
+    common:
+      # 部署drain等待Reader、队列、Bulk和任务终态安全收敛的最长秒数。
+      drain-timeout-seconds: ${SANO_ES_SYNC_DRAIN_TIMEOUT_SECONDS:600}
+      write:
+        # 所有同步引擎合计允许的在途ES Bulk请求数。
+        global-bulk-concurrency: ${SANO_ES_SYNC_GLOBAL_BULK_CONCURRENCY:3}
+        # polling有等待请求时为其保留的Bulk并发数。
+        polling-reserved-concurrency: ${SANO_ES_SYNC_POLLING_RESERVED_CONCURRENCY:2}
+        # polling空闲时T+1最多可使用的Bulk并发数。
+        t-plus-one-max-concurrency: ${SANO_ES_SYNC_T_PLUS_ONE_MAX_CONCURRENCY:3}
+        # 所有同步引擎排队、在途和重试批次的合计内存预算。
+        global-queue-max-bytes: ${SANO_ES_SYNC_GLOBAL_QUEUE_MAX_BYTES:128MB}
+
+    t-plus-one:
+      # 测试主实例默认开启T+1；临时query实例由Compose覆盖为false。
+      enabled: ${SANO_ES_IMPORT_T_PLUS_ONE_ENABLED:true}
       # 每天02:30导入昨天的数据
       cron: "0 30 2 * * ?"
-      # 每轮调度最多运行480分钟，超时后不再启动下一条待执行任务
+      # 每轮调度最大运行分钟数；到期后不再启动下一条待执行任务。
       max-run-minutes: 5
       # 每轮调度最多拉取100条待执行任务，覆盖多表和少量历史积压场景
       task-fetch-limit: 100
@@ -74,7 +111,7 @@ sano:
       queue-capacity: 10
       # 每次Bulk文档数
       bulk-actions: 3000
-      # 或每次bulk累计8MB立即发送，单位MB
+      # 或每次bulk累计5MB立即发送，单位MB
       bulk-size-mb: 5
       # 最大重试次数
       retry-times: 3
@@ -84,97 +121,78 @@ sano:
       max-failed-documents: 1000
       # 失败率超过该值时不绑定alias，0.001 = 0.1%
       max-failure-rate: 0.001
-      # 是否开启导入监控
+      # 是否开启T+1导入监控
       enable-monitor: true
-
-      # 单机Docker ES建议保持0副本
-      # 导入期间是否关闭Refresh
+      # T+1建索引导入期间是否关闭Refresh
       disable-refresh: true
-      # 导入期间是否关闭副本
+      # T+1建索引导入期间是否关闭副本
       disable-replica: true
 
-      notify:
-        # 导入任务结束通知总开关，开发环境默认关闭，避免本地调试误发。
-        enabled: ${IMPORT_NOTIFY_ENABLED:false}
-        # 是否发送成功任务通知。
-        success-enabled: false
-        # 是否发送失败任务通知。
-        failure-enabled: false
-        # 是否发送超时暂停任务通知。
-        timeout-enabled: false
-        # 通知标题前缀，便于在IM中识别来源。
-        subject-prefix: "[SANO-ES-TEST]"
-        channels:
-          lark:
-            # 飞书/Lark机器人开关。
-            enabled: ${LARK_NOTIFY_ENABLED:false}
-            # 飞书/Lark机器人webhook地址。
-            webhook-url: ${LARK_WEBHOOK_URL:https://open.larksuite.com/open-apis/bot/v2/hook/c1af0ddb-8ba5-4dae-a0e2-ecc476bcc5fd}
-            # 飞书/Lark机器人签名密钥，未开启签名时留空。
-            secret: ${LARK_WEBHOOK_SECRET:6MKCorKya6KxX99qxqaKwh}
-          dingtalk:
-            # 钉钉机器人开关。
-            enabled: ${DINGTALK_NOTIFY_ENABLED:false}
-            # 钉钉机器人webhook地址。
-            webhook-url: ${DINGTALK_WEBHOOK_URL:}
-            # 钉钉机器人签名密钥，未开启签名时留空。
-            secret: ${DINGTALK_WEBHOOK_SECRET:}
-
-      tables:
-        - enabled: true
-          index-alias: sano_wallet_coin_record
-          table-name: sano_wallet_coin_record
-          mapping-file: sano_wallet_coin_record.json
-          # 导入完成是否删除该表历史索引
-          delete-history-index: true
-          # 该表历史索引保留天数
-          reserve-days: 30
-          id-column: id
-          dt-column: dt
-          # dt字段类型；DATE按dt = importDate查询。
-          dt-column-type: DATE
-          # where-sql为空时自动使用 dt = importDate
-          where-sql:
-        - enabled: true
-          index-alias: sano_wallet_diamond_record
-          table-name: sano_wallet_diamond_record
-          mapping-file: sano_wallet_diamond_record.json
-          # 导入完成是否删除该表历史索引
-          delete-history-index: true
-          # 该表历史索引保留天数
-          reserve-days: 30
-          id-column: id
-          dt-column: dt
-          # dt字段类型；DATE按dt = importDate查询。
-          dt-column-type: DATE
-          # where-sql为空时自动使用 dt = importDate
-          where-sql:
-        - enabled: true
-          index-alias: sano_wallet_lucky_diamond_record_10m
-          table-name: sano_wallet_lucky_diamond_record_10m
-          mapping-file: sano_wallet_lucky_diamond_record_10m.json
-          # 导入完成是否删除该表历史索引
-          delete-history-index: true
-          # 该表历史索引保留天数
-          reserve-days: 30
-          id-column: id
-          dt-column: dt
-          # dt字段类型；DATE按dt = importDate查询。
-          dt-column-type: DATE
-          # where-sql为空时自动使用 dt = importDate
-          where-sql:
-        - enabled: true
-          index-alias: sano_game_record
-          table-name: sano_game_record
-          mapping-file: sano_game_record.json
-          # 导入完成是否删除该表历史索引
-          delete-history-index: true
-          # 该表历史索引保留天数
-          reserve-days: 30
-          id-column: id
-          # 源表没有DATE分区字段，使用创建时间按天读取。
-          dt-column: create_time
-          # DATETIME/TIMESTAMP字段按当天左闭右开时间范围查询。
-          dt-column-type: DATETIME
-          # where-sql为空时自动按create_time的当天时间范围查询。
-          where-sql:
+    # T+1与polling共用同一表目录；enabled=false时两种引擎都忽略该表。
+    # index-alias是业务查询Alias，table-name是MySQL源表，mapping-file位于resources/esmapping。
+    # sync-mode未配置时默认t-plus-one；polling首次启动还必须配置bootstrap-start-date。
+    # id-column用于MySQL游标和ES文档ID；dt-column/dt-column-type/where-sql决定日期查询条件。
+    # delete-history-index和reserve-days控制成功导入后的历史索引清理。
+    tables:
+      - enabled: true
+        index-alias: sano_wallet_coin_record
+        table-name: sano_wallet_coin_record
+        mapping-file: sano_wallet_coin_record.json
+        # 版本A全部保持T+1，polling引擎完成前不得改为polling。
+        sync-mode: t-plus-one
+        # 导入完成是否删除该表历史索引
+        delete-history-index: true
+        # 该表历史索引保留天数
+        reserve-days: 30
+        id-column: id
+        dt-column: dt
+        # dt字段类型；DATE按dt = importDate查询。
+        dt-column-type: DATE
+        # where-sql为空时自动使用 dt = importDate
+        where-sql:
+      - enabled: true
+        index-alias: sano_wallet_diamond_record
+        table-name: sano_wallet_diamond_record
+        mapping-file: sano_wallet_diamond_record.json
+        sync-mode: t-plus-one
+        # 导入完成是否删除该表历史索引
+        delete-history-index: true
+        # 该表历史索引保留天数
+        reserve-days: 30
+        id-column: id
+        dt-column: dt
+        # dt字段类型；DATE按dt = importDate查询。
+        dt-column-type: DATE
+        # where-sql为空时自动使用 dt = importDate
+        where-sql:
+      - enabled: true
+        index-alias: sano_wallet_lucky_diamond_record_10m
+        table-name: sano_wallet_lucky_diamond_record_10m
+        mapping-file: sano_wallet_lucky_diamond_record_10m.json
+        sync-mode: t-plus-one
+        # 导入完成是否删除该表历史索引
+        delete-history-index: true
+        # 该表历史索引保留天数
+        reserve-days: 30
+        id-column: id
+        dt-column: dt
+        # dt字段类型；DATE按dt = importDate查询。
+        dt-column-type: DATE
+        # where-sql为空时自动使用 dt = importDate
+        where-sql:
+      - enabled: true
+        index-alias: sano_game_record
+        table-name: sano_game_record
+        mapping-file: sano_game_record.json
+        sync-mode: t-plus-one
+        # 导入完成是否删除该表历史索引
+        delete-history-index: true
+        # 该表历史索引保留天数
+        reserve-days: 30
+        id-column: id
+        # 源表没有DATE分区字段，使用创建时间按天读取。
+        dt-column: create_time
+        # DATETIME/TIMESTAMP字段按当天左闭右开时间范围查询。
+        dt-column-type: DATETIME
+        # where-sql为空时自动按create_time的当天时间范围查询。
+        where-sql:

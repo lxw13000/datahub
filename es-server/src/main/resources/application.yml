@@ -10,3 +10,8 @@ spring:
   threads:
     virtual:
       enabled: true
+
+sano:
+  # all提供查询并启用同步；query同样提供查询，但关闭所有同步任务和流水线。
+  server-mode: all
+  es:

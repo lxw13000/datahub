@@ -1,5 +1,6 @@
 package com.tsd.sano.es.importer.notify;
 
+import com.tsd.sano.es.core.config.NotifyProperties;
 import com.tsd.sano.es.importer.pipeline.config.EsImportProperties;
 import com.tsd.sano.es.importer.pipeline.model.ImportStatistics;
 import com.tsd.sano.es.importer.taskstore.model.SanoImportTask;
@@ -23,14 +24,21 @@ public class ImportNotifyService {
 
     private static final Logger log = LoggerFactory.getLogger(ImportNotifyService.class);
 
-    private final EsImportProperties properties;
+    /** 导入消息标题前缀，由业务通知服务定义，不属于通用消息通道配置。 */
+    private static final String SUBJECT_PREFIX = "[SANO-ES]";
+
+    private final EsImportProperties importProperties;
+    private final NotifyProperties notifyProperties;
     private final List<ImportNotifier> notifiers;
 
     /**
-     * 注入通知配置和所有通知渠道实现。
+     * 注入导入参数、消息配置和所有通知渠道实现。
      */
-    public ImportNotifyService(EsImportProperties properties, List<ImportNotifier> notifiers) {
-        this.properties = properties;
+    public ImportNotifyService(EsImportProperties importProperties,
+                               NotifyProperties notifyProperties,
+                               List<ImportNotifier> notifiers) {
+        this.importProperties = importProperties;
+        this.notifyProperties = notifyProperties;
         this.notifiers = notifiers;
     }
 
@@ -39,8 +47,7 @@ public class ImportNotifyService {
      */
     public void notifySuccess(SanoImportTask task, ImportStatistics statistics) {
         try {
-            EsImportProperties.NotifyConfig notify = properties.getNotify();
-            if (notify == null || !notify.isEnabled() || !notify.isSuccessEnabled()) {
+            if (!notifyProperties.isEnabled()) {
                 return;
             }
 
@@ -61,7 +68,7 @@ public class ImportNotifyService {
                     .append("成功：").append(success).append('\n')
                     .append("失败：").append(failed).append('\n')
                     .append("Bulk次数：").append(bulkCount).append('\n')
-                    .append("最后成功ID：").append(task.getLastSuccessId()).append('\n')
+                    .append("安全断点ID：").append(task.getLastSuccessId()).append('\n')
                     .append("耗时ms：").append(costMs(task));
 
             dispatch(new ImportNotifyMessage("SUCCESS", title, content.toString()), task);
@@ -77,8 +84,7 @@ public class ImportNotifyService {
      */
     public void notifyFailed(SanoImportTask task, ImportStatistics statistics, Throwable error) {
         try {
-            EsImportProperties.NotifyConfig notify = properties.getNotify();
-            if (notify == null || !notify.isEnabled() || !notify.isFailureEnabled()) {
+            if (!notifyProperties.isEnabled()) {
                 return;
             }
 
@@ -101,7 +107,7 @@ public class ImportNotifyService {
                     .append("本次失败：").append(currentFailed).append('\n')
                     .append("累计成功：").append(task.getSuccessCount()).append('\n')
                     .append("累计失败：").append(task.getFailedCount()).append('\n')
-                    .append("最后成功ID：").append(task.getLastSuccessId()).append('\n')
+                    .append("安全断点ID：").append(task.getLastSuccessId()).append('\n')
                     .append("执行次数：").append(task.getRunCount()).append('\n')
                     .append("耗时ms：").append(costMs(task)).append('\n')
                     .append("错误：").append(StringUtils.left(errorMessage, 800));
@@ -119,8 +125,7 @@ public class ImportNotifyService {
      */
     public void notifyTimeoutPartial(SanoImportTask task, ImportStatistics statistics) {
         try {
-            EsImportProperties.NotifyConfig notify = properties.getNotify();
-            if (notify == null || !notify.isEnabled() || !notify.isTimeoutEnabled()) {
+            if (!notifyProperties.isEnabled()) {
                 return;
             }
 
@@ -147,8 +152,9 @@ public class ImportNotifyService {
                     .append("本次读取：").append(currentRead).append('\n')
                     .append("本次成功：").append(currentSuccess).append('\n')
                     .append("本次失败：").append(currentFailed).append('\n')
-                    .append("最后成功ID：").append(task.getLastSuccessId()).append('\n')
-                    .append("最大运行分钟：").append(properties.getMaxRunMinutes()).append('\n')
+                    .append("安全断点ID：").append(task.getLastSuccessId()).append('\n')
+                    .append("最大运行分钟：")
+                    .append(importProperties.getTPlusOne().getMaxRunMinutes()).append('\n')
                     .append("耗时ms：").append(costMs(task)).append('\n')
                     .append("说明：已停止继续读取MySQL，剩余数据下次任务继续同步。");
 
@@ -185,8 +191,7 @@ public class ImportNotifyService {
      * 构建通知标题。
      */
     private String buildTitle(String eventTitle, SanoImportTask task) {
-        return StringUtils.defaultString(properties.getNotify().getSubjectPrefix()) + " "
-                + eventTitle + " " + task.getIndexName();
+        return SUBJECT_PREFIX + " " + eventTitle + " " + task.getIndexName();
     }
 
     /**

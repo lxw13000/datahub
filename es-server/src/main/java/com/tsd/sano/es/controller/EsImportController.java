@@ -38,8 +38,12 @@ public class EsImportController {
 
     private final EsImportTask importTask;
 
+    /**
+     * 创建T+1任务索引；query模式或T+1总开关关闭时拒绝执行。
+     */
     @GetMapping("/createImportTaskIndex")
     public ResultVO<String> createImportTaskIndex() {
+        importTask.requireEnabled();
         boolean index = importTaskService.createIndex();
 
         return ResultVO.resultMsg(index, "创建导入任务索引");

@@ -5,6 +5,8 @@ import com.tsd.sano.es.importer.pipeline.config.EsImportProperties;
 import com.tsd.sano.es.importer.pipeline.model.EsImportConfig;
 import com.tsd.sano.es.importer.pipeline.model.ImportContext;
 import com.tsd.sano.es.importer.pipeline.model.ImportStatistics;
+import com.tsd.sano.es.sync.config.EsServiceModeManager;
+import com.tsd.sano.es.sync.service.SyncDrainCoordinator;
 import org.apache.commons.lang3.StringUtils;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -13,8 +15,6 @@ import org.springframework.stereotype.Service;
 import java.time.LocalDate;
 import java.time.format.DateTimeFormatter;
 import java.time.format.DateTimeParseException;
-import java.util.List;
-import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.*;
 
@@ -35,11 +35,6 @@ public class EsImportService {
     private static final DateTimeFormatter INDEX_DATE_FORMATTER = DateTimeFormatter.BASIC_ISO_DATE;
 
     /**
-     * 发送结束标记的队列等待时间，避免异常场景下永久阻塞。
-     */
-    private static final long END_SIGNAL_TIMEOUT_SECONDS = 1L;
-
-    /**
      * 运行中的导入任务Key集合。
      *
      * <p>用于防止同一alias/date重复触发，避免并发创建同一个真实索引。</p>
@@ -51,6 +46,8 @@ public class EsImportService {
     private final JdbcDataReader jdbcDataReader;
     private final EsBulkImporter bulkImporter;
     private final ImportMonitor importMonitor;
+    private final SyncDrainCoordinator drainCoordinator;
+    private final EsServiceModeManager serviceModeManager;
 
     /**
      * 注入导入流程需要的各个协作组件。
@@ -59,12 +56,16 @@ public class EsImportService {
                            EsIndexManager indexManager,
                            JdbcDataReader jdbcDataReader,
                            EsBulkImporter bulkImporter,
-                           ImportMonitor importMonitor) {
+                           ImportMonitor importMonitor,
+                           SyncDrainCoordinator drainCoordinator,
+                           EsServiceModeManager serviceModeManager) {
         this.properties = properties;
         this.indexManager = indexManager;
         this.jdbcDataReader = jdbcDataReader;
         this.bulkImporter = bulkImporter;
         this.importMonitor = importMonitor;
+        this.drainCoordinator = drainCoordinator;
+        this.serviceModeManager = serviceModeManager;
     }
 
     /**
@@ -75,6 +76,8 @@ public class EsImportService {
      * @param resumeIndex    true表示复用已有索引续跑，false表示创建新索引
      */
     public ImportStatistics importData(EsImportConfig config, long deadlineMillis, boolean resumeIndex) {
+        // 防御直接调用导入服务绕过调度器或Web门禁；query模式不允许创建Reader/Bulk链路。
+        serviceModeManager.requireSyncEnabled();
         // 先补全默认配置，确保后续组件拿到完整的表名、索引名和日期。
         normalizeConfig(config);
 
@@ -96,6 +99,7 @@ public class EsImportService {
 
             // ImportContext贯穿Reader、Bulk、Index三个阶段，共享统计和中止信号。
             ImportContext context = new ImportContext(config, statistics, properties, deadlineMillis);
+            drainCoordinator.attachTPlusOneContext(config, context);
 
             // Java 21中ExecutorService支持try-with-resources，确保线程池生命周期跟随本次导入结束。
             try (ExecutorService bulkExecutor = Executors.newSingleThreadExecutor(runnable -> {
@@ -119,6 +123,13 @@ public class EsImportService {
 
                     // 先统计总量，避免无数据时创建空索引并挂alias。
                     long total = jdbcDataReader.count(context);
+                    if (statistics.isTimeoutPartial()) {
+                        // drain在COUNT之前或执行期间到达时，不再创建索引或启动Reader/Bulk流水线。
+                        log.warn("===> ES-Import stopped after count for drain. alias={}, table={}, date={}, operationId={}",
+                                config.getIndexAlias(), config.getTableName(), config.getImportDate(),
+                                statistics.getStopOperationId());
+                        return statistics;
+                    }
                     if (total <= 0L) {
                         // 指定日期无数据属于正常业务结果，不创建空索引、不切换alias，任务状态按SUCCESS处理。
                         log.warn("===> ES-Import no data, skip import. alias={}, table={}, date={}",
@@ -131,10 +142,16 @@ public class EsImportService {
                     if (resumeIndex) {
                         // 续跑任务复用上一次未完成索引，不重新创建，避免覆盖已有导入进度。
                         if (!indexManager.exists(config.getIndexName())) {
-                            throw new ServiceException("ES import resume index not exists, index=" + config.getIndexName());
+                            if (config.getStartId() > 0L || !indexManager.createIndex(context)) {
+                                throw new ServiceException("ES import resume index not exists, index=" + config.getIndexName());
+                            }
+                            // drain可能在首批读取前到达，此时安全断点为0且索引尚未创建；续跑可安全补建。
+                            log.warn("===> ES-Import recreate empty partial index before resume. index={}",
+                                    config.getIndexName());
+                        } else {
+                            log.info("===> ES-Import reuse partial index. index={}, startId={}",
+                                    config.getIndexName(), config.getStartId());
                         }
-                        log.info("===> ES-Import reuse partial index. index={}, startId={}",
-                                config.getIndexName(), config.getStartId());
                     } else {
                         // 创建真实索引，不提前绑定alias，避免半成品索引被查询。
                         if (!indexManager.createIndex(context)) {
@@ -151,8 +168,10 @@ public class EsImportService {
                     try {
                         jdbcDataReader.readToQueue(context);
                     } catch (Exception e) {
-                        // Reader失败时主动投递结束标记，让Bulk线程尽快退出。
-                        offerEndSignals(context);
+                        // Reader异常不是正常生产结束；中断Bulk调度器，避免多worker因结束信号不足永久等待。
+                        context.abort(e);
+                        bulkFuture.cancel(true);
+                        bulkExecutor.shutdownNow();
                         throw e;
                     }
                     // 等待Bulk线程全部消费完成，确保写入统计完整。
@@ -161,7 +180,7 @@ public class EsImportService {
                     if (statistics.isTimeoutPartial()) {
                         // 超时暂停只恢复索引参数并刷新，不切换alias，避免线上读到半成品索引。
                         indexManager.afterImport(context);
-                        log.warn("===> ES-Import timeout partial. alias={}, index={}, total={}, read={}, success={}, failed={}, lastId={}, costMs={}",
+                        log.warn("===> ES-Import timeout partial. alias={}, index={}, total={}, read={}, success={}, failed={}, lastReadId={}, safeCheckpointId={}, blockedSequence={}, costMs={}",
                                 config.getIndexAlias(),
                                 config.getIndexName(),
                                 statistics.getTotal().get(),
@@ -169,6 +188,8 @@ public class EsImportService {
                                 statistics.getSuccess().get(),
                                 statistics.getFailed().get(),
                                 statistics.getLastId(),
+                                statistics.getLastSuccessId(),
+                                statistics.getCheckpointBlockedSequence(),
                                 System.currentTimeMillis() - statistics.getStartTime());
                         return statistics;
                     }
@@ -199,6 +220,8 @@ public class EsImportService {
                             ? ServiceException
                             : new ServiceException("ES import failed, error=" + e.getMessage(), e);
                 } finally {
+                    // 正常路径额度已由Bulk批次释放；异常路径在这里兜底释放队列和在途批次额度。
+                    context.releaseAllMemoryReservations();
                     statistics.setEndTime(System.currentTimeMillis());
                     monitorFinish(context);
                 }
@@ -255,28 +278,6 @@ public class EsImportService {
     }
 
     /**
-     * 读取失败时主动发送结束标记，避免Bulk线程永久阻塞。
-     */
-    private void offerEndSignals(ImportContext context) {
-        for (int i = 0; i < context.getProperties().getWorkerCount(); i++) {
-            try {
-                boolean offered = context.getQueue().offer(
-                        List.<Map<String, Object>>of(),
-                        END_SIGNAL_TIMEOUT_SECONDS,
-                        TimeUnit.SECONDS
-                );
-                if (!offered || context.isAborted()) {
-                    // 队列满或Bulk已失败时停止投递，避免异常流程继续阻塞。
-                    return;
-                }
-            } catch (InterruptedException e) {
-                Thread.currentThread().interrupt();
-                throw new ServiceException("ES import interrupted while sending end signal", e);
-            }
-        }
-    }
-
-    /**
      * 等待Bulk调度任务完成。
      */
     private void waitBulkFinished(Future<?> bulkFuture) {
@@ -304,7 +305,8 @@ public class EsImportService {
             throw new ServiceException("ES import all documents failed, total=" + total + ", failed=" + failed);
         }
 
-        if (failed > properties.getMaxFailedDocuments() || failureRate > properties.getMaxFailureRate()) {
+        if (failed > properties.getTPlusOne().getMaxFailedDocuments()
+                || failureRate > properties.getTPlusOne().getMaxFailureRate()) {
             // 失败超过阈值时中断上线，避免业务查询读到明显不完整的数据。
             throw new ServiceException("ES import failed documents exceed threshold, total=" + total
                     + ", success=" + success
@@ -334,7 +336,7 @@ public class EsImportService {
      * 触发导入开始监控。
      */
     private void monitorStart(ImportContext context) {
-        if (properties.isEnableMonitor()) {
+        if (properties.getTPlusOne().isEnableMonitor()) {
             importMonitor.onStart(context);
         }
     }
@@ -343,7 +345,7 @@ public class EsImportService {
      * 触发导入完成监控。
      */
     private void monitorFinish(ImportContext context) {
-        if (properties.isEnableMonitor()) {
+        if (properties.getTPlusOne().isEnableMonitor()) {
             importMonitor.onFinish(context);
         }
     }
@@ -352,7 +354,7 @@ public class EsImportService {
      * 触发导入失败监控。
      */
     private void monitorError(ImportContext context, Exception error) {
-        if (properties.isEnableMonitor()) {
+        if (properties.getTPlusOne().isEnableMonitor()) {
             importMonitor.onError(context, error);
         }
     }

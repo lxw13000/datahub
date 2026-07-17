@@ -9,7 +9,10 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.tsd.sano.es.importer.pipeline.config.EsImportProperties;
 import com.tsd.sano.es.core.exception.ServiceException;
 import com.tsd.sano.es.importer.pipeline.model.EsImportConfig;
+import com.tsd.sano.es.importer.pipeline.model.ImportBatch;
 import com.tsd.sano.es.importer.pipeline.model.ImportContext;
+import com.tsd.sano.es.sync.config.TableSyncMode;
+import com.tsd.sano.es.sync.service.GlobalEsWritePermitManager;
 import org.apache.commons.lang3.StringUtils;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -72,13 +75,17 @@ public class EsBulkImporter {
 
     private final ElasticsearchClient client;
     private final ObjectMapper objectMapper;
+    private final GlobalEsWritePermitManager writePermitManager;
 
     /**
      * 注入ES客户端和JSON工具，JSON工具用于估算单条文档体积。
      */
-    public EsBulkImporter(ElasticsearchClient client, ObjectMapper objectMapper) {
+    public EsBulkImporter(ElasticsearchClient client,
+                          ObjectMapper objectMapper,
+                          GlobalEsWritePermitManager writePermitManager) {
         this.client = client;
         this.objectMapper = objectMapper;
+        this.writePermitManager = writePermitManager;
     }
 
     /**
@@ -86,35 +93,45 @@ public class EsBulkImporter {
      */
     public void importFromQueue(ImportContext context) {
         EsImportProperties properties = requireProperties(context);
-        int workerCount = properties.getWorkerCount();
+        int workerCount = properties.getTPlusOne().getWorkerCount();
 
         // Java 21中ExecutorService支持try-with-resources，导入结束后自动关闭工作线程池。
         try (ExecutorService executor = Executors.newFixedThreadPool(workerCount, new BulkThreadFactory())) {
-            List<Future<?>> futures = new ArrayList<>(workerCount);
+            CompletionService<Void> completions = new ExecutorCompletionService<>(executor);
 
             for (int i = 0; i < workerCount; i++) {
                 // 每个工作线程独立消费队列，提升Bulk写入吞吐。
-                futures.add(executor.submit(() -> consumeQueue(context)));
+                completions.submit(() -> {
+                    consumeQueue(context);
+                    return null;
+                });
             }
 
             // 不再接收新任务，等待已提交的Bulk工作线程结束。
             executor.shutdown();
-            waitWorkersDone(executor, futures);
+            waitWorkersDone(context, executor, completions, workerCount);
         }
     }
 
     /**
-     * 单个工作线程循环消费队列，空批次表示Reader已结束。
+     * 单个工作线程循环消费队列，结束信号表示Reader已完成投递。
      */
     private void consumeQueue(ImportContext context) {
         try {
             while (true) {
-                List<Map<String, Object>> rows = takeBatch(context);
-                if (rows.isEmpty()) {
-                    // Reader投递空集合表示没有更多数据，当前工作线程正常退出。
+                ImportBatch batch = takeBatch(context);
+                if (batch.isEndSignal()) {
+                    // 每个Worker收到一个独立结束信号后正常退出。
                     return;
                 }
-                importRows(context, rows);
+
+                boolean checkpointSafe = importRows(context, batch.rows());
+                context.completeBatch(batch, checkpointSafe);
+                if (!checkpointSafe) {
+                    // item级失败仍按现有容差策略继续导入，但不能越过本批次保存续跑断点。
+                    log.warn("===> ES-Import checkpoint blocked by unsafe batch. sequence={}, lastId={}, size={}",
+                            batch.sequence(), batch.lastId(), batch.rows().size());
+                }
             }
         } catch (RuntimeException e) {
             // 任意Bulk线程失败都要通知Reader停止生产，避免队列写入侧卡死。
@@ -125,20 +142,25 @@ public class EsBulkImporter {
 
     /**
      * 将Reader读取的一批数据按bulkActions和bulkSizeMb继续拆分。
+     *
+     * @return true表示该Reader批次内所有文档均成功，可用于推进安全断点
      */
-    private void importRows(ImportContext context, List<Map<String, Object>> rows) {
+    private boolean importRows(ImportContext context, List<Map<String, Object>> rows) {
         EsImportProperties properties = requireProperties(context);
-        int bulkActions = Math.max(1, properties.getBulkActions());
-        int maxBulkBytes = Math.max(1, properties.getBulkSizeMb()) * MB;
+        int bulkActions = Math.max(1, properties.getTPlusOne().getBulkActions());
+        int maxBulkBytes = Math.max(1, properties.getTPlusOne().getBulkSizeMb()) * MB;
         int actionLimit = estimateActionLimit(rows, bulkActions, maxBulkBytes);
 
         // chunk保存本次待发送的Bulk子批次，按配置数量和估算体积计算后的数量阈值切分。
         List<Map<String, Object>> chunk = new ArrayList<>(Math.min(rows.size(), actionLimit));
+        boolean checkpointSafe = true;
 
         for (Map<String, Object> row : rows) {
             if (chunk.size() >= actionLimit) {
                 // 达到阈值立即发送，避免单次请求过大影响ES稳定性。
-                sendWithRetry(context, chunk);
+                if (!sendWithRetry(context, chunk)) {
+                    checkpointSafe = false;
+                }
                 chunk = new ArrayList<>(Math.min(rows.size(), actionLimit));
             }
 
@@ -147,27 +169,35 @@ public class EsBulkImporter {
 
         if (!chunk.isEmpty()) {
             // 发送最后不足阈值的一批数据。
-            sendWithRetry(context, chunk);
+            if (!sendWithRetry(context, chunk)) {
+                checkpointSafe = false;
+            }
         }
+        return checkpointSafe;
     }
 
     /**
      * Bulk请求失败时重试整批数据。
      *
      * <p>这里处理的是网络、ES服务不可用等请求级异常。请求级异常会重试，
-     * 多次失败后中断流程；单条文档错误在Bulk响应中统计，不直接中断任务。</p>
+     * 多次失败后中断流程；单条文档错误在Bulk响应中统计，不直接中断任务，
+     * 但返回false阻止安全断点越过该批次。</p>
      */
-    private void sendWithRetry(ImportContext context, List<Map<String, Object>> rows) {
+    private boolean sendWithRetry(ImportContext context, List<Map<String, Object>> rows) {
         EsImportProperties properties = requireProperties(context);
-        int maxAttempt = Math.max(0, properties.getRetryTimes()) + 1;
+        int maxAttempt = Math.max(0, properties.getTPlusOne().getRetryTimes()) + 1;
 
         for (int attempt = 1; attempt <= maxAttempt; attempt++) {
             try {
                 long startTime = System.currentTimeMillis();
-                BulkResponse response = sendBulk(context, rows);
+                BulkResponse response;
+                // 许可证只覆盖真实ES请求时间，响应统计和重试等待均不占用全局并发额度。
+                try (GlobalEsWritePermitManager.Permit ignored =
+                             writePermitManager.acquire(TableSyncMode.T_PLUS_ONE)) {
+                    response = sendBulk(context, rows);
+                }
                 long costMs = System.currentTimeMillis() - startTime;
-                handleResponse(context, response, rows.size(), costMs);
-                return;
+                return handleResponse(context, response, rows.size(), costMs);
             } catch (IOException e) {
                 if (attempt >= maxAttempt) {
                     // 请求级失败说明本批数据没有可靠写入，继续执行会得到不完整索引。
@@ -180,9 +210,10 @@ public class EsBulkImporter {
                 log.warn("===> ES-Import bulk request failed, retry later. attempt={}/{}, size={}, error={}",
                         attempt, maxAttempt, rows.size(), e.getMessage());
                 // 简单固定间隔重试，避免ES短暂抖动直接导致整次导入失败。
-                sleepQuietly(properties.getRetryInterval());
+                sleepQuietly(properties.getTPlusOne().getRetryInterval());
             }
         }
+        return false;
     }
 
     /**
@@ -228,12 +259,13 @@ public class EsBulkImporter {
     /**
      * 处理Bulk响应中的成功和失败明细。
      *
-     * <p>ES item级失败只影响对应文档，统计后继续处理后续批次。</p>
+     * <p>ES item级失败只影响对应文档，统计后继续处理后续批次；返回值用于
+     * 判断当前Reader批次是否允许进入连续安全断点。</p>
      */
-    private void handleResponse(ImportContext context, BulkResponse response, int requestSize, long costMs) {
+    private boolean handleResponse(ImportContext context, BulkResponse response, int requestSize, long costMs) {
         if (response == null) {
             // 空响应表示本批没有可发送文档，统计已在构建阶段处理。
-            return;
+            return false;
         }
 
         long failed = response.items().stream()
@@ -243,7 +275,6 @@ public class EsBulkImporter {
 
         context.getStatistics().getSuccess().addAndGet(success);
         context.getStatistics().getFailed().addAndGet(failed);
-        updateLastSuccessId(context, response);
         long bulkCount = context.getStatistics().getBulkCount().incrementAndGet();
 
         if (response.errors()) {
@@ -266,6 +297,9 @@ public class EsBulkImporter {
                     context.getStatistics().getSuccess().get(),
                     context.getStatistics().getFailed().get());
         }
+
+        // 响应条数少于请求条数说明存在缺少文档ID而被跳过的记录，同样不能推进安全断点。
+        return failed == 0L && response.items().size() == requestSize;
     }
 
     /**
@@ -286,23 +320,6 @@ public class EsBulkImporter {
             if (count >= MAX_ERROR_LOG_COUNT) {
                 // 失败过多时截断日志，防止单次导入刷爆日志文件。
                 break;
-            }
-        }
-    }
-
-    /**
-     * 根据Bulk成功响应推进断点ID。
-     */
-    private void updateLastSuccessId(ImportContext context, BulkResponse response) {
-        for (BulkResponseItem item : response.items()) {
-            if (item.error() != null || StringUtils.isBlank(item.id())) {
-                continue;
-            }
-            try {
-                context.getStatistics().updateLastSuccessId(Long.parseLong(item.id()));
-            } catch (NumberFormatException e) {
-                // 当前导入依赖数值型主键分页，非数值ID不参与断点推进。
-                log.warn("===> ES-Import skip checkpoint update because document id is not numeric. id={}", item.id());
             }
         }
     }
@@ -339,7 +356,7 @@ public class EsBulkImporter {
     /**
      * 从共享队列中获取一批待读取数据。
      */
-    private List<Map<String, Object>> takeBatch(ImportContext context) {
+    private ImportBatch takeBatch(ImportContext context) {
         try {
             return context.getQueue().take();
         } catch (InterruptedException e) {
@@ -395,16 +412,20 @@ public class EsBulkImporter {
     /**
      * 等待所有Bulk工作线程结束。
      */
-    private void waitWorkersDone(ExecutorService executor, List<Future<?>> futures) {
+    private void waitWorkersDone(ImportContext context,
+                                 ExecutorService executor,
+                                 CompletionService<Void> completions,
+                                 int workerCount) {
         try {
-            for (Future<?> future : futures) {
-                // future.get会向上抛出工作线程异常，保证主流程感知失败。
-                future.get();
+            for (int i = 0; i < workerCount; i++) {
+                // 按实际完成顺序观察结果；任一worker失败后立即中断其余worker，避免顺序get永久等待。
+                completions.take().get();
             }
             if (!executor.awaitTermination(1, TimeUnit.MINUTES)) {
                 log.warn("===> ES-Import bulk worker pool still terminating");
             }
         } catch (Exception e) {
+            context.abort(e);
             executor.shutdownNow();
             throw new ServiceException("ES bulk importer worker failed, error=" + e.getMessage(), e);
         }

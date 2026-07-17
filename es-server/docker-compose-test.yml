@@ -4,12 +4,13 @@ networks:
     name: ${NETWORK_NAME:-sano-net}
 
 services:
+  # 测试环境常驻实例：查询始终开放，server-mode=all时额外启用T+1同步。
   es-server:
     build:
       context: .
       dockerfile: Dockerfile
     image: ${ES_SERVER_IMAGE:-lxw13000/sano-es-server}:${ES_SERVER_IMAGE_TAG:-latest}
-    container_name: ${CONTAINER_NAME:-sano-es-server}
+    container_name: ${CONTAINER_NAME:-sano-es-server-test}
     restart: unless-stopped
     logging:
       driver: "json-file"
@@ -21,32 +22,29 @@ services:
     mem_reservation: 1g
     environment:
       TZ: Asia/Shanghai
-      SPRING_PROFILES_ACTIVE: prod
-      SERVER_PORT: ${SERVER_PORT:-8002}
+      SPRING_PROFILES_ACTIVE: test
+      SERVER_PORT: ${SERVER_PORT:-9003}
       LOG_DIR: /app/logs/es-server
       SANO_SERVER_MODE: ${SANO_SERVER_MODE:-all}
-
-      # Java运行参数。正式服务器还有其他服务时，限制导入服务资源占用。
+      SANO_ES_IMPORT_T_PLUS_ONE_ENABLED: ${SANO_ES_IMPORT_T_PLUS_ONE_ENABLED:-true}
+      SANO_ES_POLLING_ENABLED: "false"
       JAVA_OPTS: "-Xms1g -Xmx1536m -XX:+UseG1GC -XX:MaxGCPauseMillis=200 -XX:+HeapDumpOnOutOfMemoryError -XX:HeapDumpPath=/app/logs/es-server"
-
-      # MySQL配置。生产部署建议通过环境变量覆盖默认值。
-      MYSQL_UNM: ${MYSQL_UNM:-admin}
-      MYSQL_PWD: ${MYSQL_PWD:-fl#alHGaldsj!skgnn2850allgnJsHg}
-
-      # ES配置。容器间通过共享Docker网络访问ES内部端口。
-      ES_URIS: ${ES_URIS:-elasticsearch8:9200}
+      MYSQL_UNM: ${MYSQL_UNM:-root}
+      MYSQL_PWD: ${MYSQL_PWD:-SADFH28!asoaignljASjacoOs}
+      ES_URIS: ${ES_URIS:-elasticsearch8-test:9200}
       ES_USERNAME: ${ES_USERNAME:-elastic}
       ES_PASSWORD: ${ES_PASSWORD:-es2peter}
     ports:
-      - "127.0.0.1:${SERVER_PORT:-8002}:${SERVER_PORT:-8002}"
+      # 容器端口只供同机Nginx和部署脚本访问；外部业务走测试域名，内部业务走Nginx的9103端口。
+      - "127.0.0.1:${SERVER_PORT:-9003}:${SERVER_PORT:-9003}"
     volumes:
-      - ./logs:/app/logs/es-server
+      - ./logs-test:/app/logs/es-server
 
-  # 更新期间临时承接查询。使用当前稳定镜像，query模式从代码层禁止创建同步线程。
+  # 安全更新期间临时承接查询；同一镜像以query模式运行，所有同步入口均被运行时门禁关闭。
   es-server-query:
     profiles: ["query-handoff"]
     image: ${QUERY_ES_SERVER_IMAGE:-lxw13000/sano-es-server:latest}
-    container_name: ${QUERY_CONTAINER_NAME:-sano-es-server-query}
+    container_name: ${QUERY_CONTAINER_NAME:-sano-es-server-test-query}
     restart: unless-stopped
     logging:
       driver: "json-file"
@@ -58,19 +56,19 @@ services:
     mem_reservation: 512m
     environment:
       TZ: Asia/Shanghai
-      SPRING_PROFILES_ACTIVE: prod
-      SERVER_PORT: ${QUERY_PORT:-8003}
+      SPRING_PROFILES_ACTIVE: test
+      SERVER_PORT: ${QUERY_PORT:-9004}
       LOG_DIR: /app/logs/es-server-query
       SANO_SERVER_MODE: query
       SANO_ES_IMPORT_T_PLUS_ONE_ENABLED: "false"
       SANO_ES_POLLING_ENABLED: "false"
       JAVA_OPTS: "-Xms512m -Xmx768m -XX:+UseG1GC -XX:MaxGCPauseMillis=200"
-      MYSQL_UNM: ${MYSQL_UNM:-admin}
-      MYSQL_PWD: ${MYSQL_PWD:-fl#alHGaldsj!skgnn2850allgnJsHg}
-      ES_URIS: ${ES_URIS:-elasticsearch8:9200}
+      MYSQL_UNM: ${MYSQL_UNM:-root}
+      MYSQL_PWD: ${MYSQL_PWD:-SADFH28!asoaignljASjacoOs}
+      ES_URIS: ${ES_URIS:-elasticsearch8-test:9200}
       ES_USERNAME: ${ES_USERNAME:-elastic}
       ES_PASSWORD: ${ES_PASSWORD:-es2peter}
     ports:
-      - "127.0.0.1:${QUERY_PORT:-8003}:${QUERY_PORT:-8003}"
+      - "127.0.0.1:${QUERY_PORT:-9004}:${QUERY_PORT:-9004}"
     volumes:
-      - ./logs-query:/app/logs/es-server-query
+      - ./logs-test-query:/app/logs/es-server-query

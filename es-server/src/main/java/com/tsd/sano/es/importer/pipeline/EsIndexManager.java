@@ -104,11 +104,11 @@ public class EsIndexManager {
         String indexName = requireText(config.getIndexName(), "indexName");
 
         // 批量写入期间关闭自动刷新，减少segment频繁生成。
-        if (properties.isDisableRefresh()) {
+        if (properties.getTPlusOne().isDisableRefresh()) {
             updateRefreshInterval(indexName, "-1");
         }
         // 单机Docker部署下副本数保持0，避免副本分片长期yellow。
-        if (properties.isDisableReplica()) {
+        if (properties.getTPlusOne().isDisableReplica()) {
             updateReplicaCount(indexName, "0");
         }
     }
@@ -121,10 +121,10 @@ public class EsIndexManager {
         EsImportProperties properties = requireProperties(context);
         String indexName = requireText(config.getIndexName(), "indexName");
 
-        if (properties.isDisableRefresh()) {
+        if (properties.getTPlusOne().isDisableRefresh()) {
             updateRefreshInterval(indexName, DEFAULT_REFRESH_INTERVAL);
         }
-        if (properties.isDisableReplica()) {
+        if (properties.getTPlusOne().isDisableReplica()) {
             updateReplicaCount(indexName, DEFAULT_REPLICAS);
         }
         refresh(indexName);
@@ -186,6 +186,9 @@ public class EsIndexManager {
         deleteIndexQuietly(expiredIndex);
     }
 
+    /**
+     * 检查指定真实索引是否存在。
+     */
     public boolean exists(String indexName) {
         try {
             // exists接口用于保护创建流程，避免覆盖已有索引。

@@ -7,6 +7,7 @@ import co.elastic.clients.elasticsearch._types.OpType;
 import co.elastic.clients.elasticsearch._types.Refresh;
 import co.elastic.clients.elasticsearch._types.SortOrder;
 import co.elastic.clients.elasticsearch.core.GetResponse;
+import co.elastic.clients.elasticsearch.core.IndexRequest;
 import co.elastic.clients.elasticsearch.core.IndexResponse;
 import co.elastic.clients.elasticsearch.core.SearchResponse;
 import co.elastic.clients.elasticsearch.core.UpdateResponse;
@@ -19,6 +20,7 @@ import com.tsd.sano.es.importer.util.MappingLoader;
 import com.tsd.sano.es.importer.taskstore.model.SanoImportTask;
 import com.tsd.sano.es.importer.taskstore.model.SanoImportTaskStatus;
 import org.apache.commons.lang3.StringUtils;
+import org.elasticsearch.client.ResponseException;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
@@ -133,12 +135,14 @@ public class SanoImportTaskService {
 
         try {
             // create模式可以天然防止同一天同一张表重复生成任务。
-            IndexResponse response = client.index(request -> request
+            IndexRequest<SanoImportTask> request = new IndexRequest.Builder<SanoImportTask>()
                     .index(TASK_INDEX)
                     .id(task.getTaskId())
                     .opType(OpType.Create)
                     .refresh(Refresh.WaitFor)
-                    .document(task));
+                    .document(task)
+                    .build();
+            IndexResponse response = client.index(request);
 
             log.info("===> ES-Import task created. taskId={}, result={}", task.getTaskId(), response.result());
             return true;
@@ -150,6 +154,12 @@ public class SanoImportTaskService {
             throw new ServiceException("ES import add task failed, taskId=" + task.getTaskId()
                     + ", error=" + e.getMessage(), e);
         } catch (IOException e) {
+            // Elasticsearch Java Client可能把HTTP 409作为低层ResponseException抛出。
+            if (e instanceof ResponseException responseException
+                    && responseException.getResponse().getStatusLine().getStatusCode() == 409) {
+                log.info("===> ES-Import task already exists. taskId={}", task.getTaskId());
+                return false;
+            }
             throw new ServiceException("ES import add task failed, taskId=" + task.getTaskId()
                     + ", error=" + e.getMessage(), e);
         }

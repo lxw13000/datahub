@@ -56,7 +56,9 @@ public class SanoImportTask {
     private String status;
 
     /**
-     * 已确认成功写入ES的最大MySQL ID。
+     * 最后连续完成批次的安全断点ID。
+     *
+     * <p>保留last_success_id字段名兼容已有任务索引，实际语义不是任意成功item的最大ID。</p>
      */
     @JsonProperty("last_success_id")
     private long lastSuccessId;

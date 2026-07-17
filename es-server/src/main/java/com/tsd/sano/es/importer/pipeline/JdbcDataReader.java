@@ -1,8 +1,11 @@
 package com.tsd.sano.es.importer.pipeline;
 
+import com.fasterxml.jackson.databind.ObjectMapper;
 import com.tsd.sano.es.core.exception.ServiceException;
 import com.tsd.sano.es.importer.pipeline.model.EsImportConfig;
+import com.tsd.sano.es.importer.pipeline.model.ImportBatch;
 import com.tsd.sano.es.importer.pipeline.model.ImportContext;
+import com.tsd.sano.es.sync.service.GlobalSyncMemoryLimiter;
 import org.apache.commons.lang3.StringUtils;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -66,13 +69,29 @@ public class JdbcDataReader {
      */
     private static final long QUEUE_OFFER_TIMEOUT_SECONDS = 1L;
 
-    private final JdbcTemplate jdbcTemplate;
+    /**
+     * 查询前按每行1KB预留内存，查询完成后再按首行序列化大小校准。
+     */
+    private static final int INITIAL_ESTIMATED_ROW_BYTES = 1024;
 
     /**
-     * 注入JDBC访问组件。
+     * 实际批次估算安全系数，覆盖少量字段长度波动和容器对象开销。
      */
-    public JdbcDataReader(JdbcTemplate jdbcTemplate) {
+    private static final double BATCH_SIZE_SAFE_FACTOR = 1.1D;
+
+    private final JdbcTemplate jdbcTemplate;
+    private final ObjectMapper objectMapper;
+    private final GlobalSyncMemoryLimiter memoryLimiter;
+
+    /**
+     * 注入JDBC访问、批次体积估算和全局内存预算组件。
+     */
+    public JdbcDataReader(JdbcTemplate jdbcTemplate,
+                          ObjectMapper objectMapper,
+                          GlobalSyncMemoryLimiter memoryLimiter) {
         this.jdbcTemplate = jdbcTemplate;
+        this.objectMapper = objectMapper;
+        this.memoryLimiter = memoryLimiter;
     }
 
     /**
@@ -82,6 +101,14 @@ public class JdbcDataReader {
         EsImportConfig config = requireConfig(context);
         QueryCondition condition = buildCondition(config);
         String tableName = requireTableName(config.getTableName());
+
+        String drainOperationId = context.tryBeginReadBatch();
+        if (drainOperationId != null) {
+            context.markDrainPartial(drainOperationId);
+            log.warn("===> ES-Import count skipped for drain. operationId={}, table={}",
+                    drainOperationId, tableName);
+            return 0L;
+        }
 
         // 表名已做白名单校验，查询条件参数仍通过JDBC占位符传入。
         String sql = "SELECT COUNT(1) FROM " + tableName + " WHERE " + condition.whereSql();
@@ -95,10 +122,19 @@ public class JdbcDataReader {
             log.error("===> ES-Import count sql failed. table={}, sql={}, params={}, error={}",
                     tableName, sql, condition.params(), e.getMessage(), e);
             throw e;
+        } finally {
+            context.endReadBatch();
         }
         long totalCount = total == null ? 0L : total;
 
         context.getStatistics().getTotal().set(totalCount);
+        drainOperationId = context.currentDrainOperationId();
+        if (drainOperationId != null) {
+            // COUNT先取得查询边界时允许当前SQL完成，但不得继续创建索引或读取数据页。
+            context.markDrainPartial(drainOperationId);
+            log.warn("===> ES-Import count finished at drain boundary. operationId={}, table={}, total={}",
+                    drainOperationId, tableName, totalCount);
+        }
         log.info("===> ES-Import count datasource. table={}, total={}", tableName, totalCount);
         return totalCount;
     }
@@ -109,51 +145,115 @@ public class JdbcDataReader {
     public void readToQueue(ImportContext context) {
         EsImportConfig config = requireConfig(context);
         String idColumn = requireColumnName(config.getIdColumn(), "idColumn");
-        int pageSize = context.getProperties().getReadBatchSize();
+        int pageSize = context.getProperties().getTPlusOne().getReadBatchSize();
         long lastId = context.getStatistics().getLastId();
 
-        while (true) {
-            // 每轮读取前检查Bulk侧是否已失败，避免继续压入数据。
-            checkAbort(context);
-            if (context.isDeadlineReached()) {
-                // 到达deadline后不再发起新的MySQL查询，已入队数据交给Bulk继续写完。
-                context.markTimeoutPartial();
-                offerEndSignals(context);
-                log.warn("===> ES-Import reader reach deadline, stop mysql query. table={}, read={}, lastId={}",
-                        config.getTableName(), context.getStatistics().getRead().get(), lastId);
-                return;
+        try {
+            while (true) {
+                // 每轮读取前检查Bulk侧是否已失败，避免继续压入数据。
+                checkAbort(context);
+                String drainOperationId = context.currentDrainOperationId();
+                if (drainOperationId != null) {
+                    context.markDrainPartial(drainOperationId);
+                    offerEndSignals(context);
+                    log.warn("===> ES-Import reader stopped for drain. operationId={}, table={}, read={}, lastId={}",
+                            drainOperationId, config.getTableName(), context.getStatistics().getRead().get(), lastId);
+                    return;
+                }
+                if (context.isDeadlineReached()) {
+                    // 到达deadline后不再发起新的MySQL查询，已入队数据交给Bulk继续写完。
+                    context.markTimeoutPartial();
+                    offerEndSignals(context);
+                    log.warn("===> ES-Import reader reach deadline, stop mysql query. table={}, read={}, lastId={}",
+                            config.getTableName(), context.getStatistics().getRead().get(), lastId);
+                    return;
+                }
+
+                GlobalSyncMemoryLimiter.Reservation reservation = memoryLimiter.reserve(
+                        (long) pageSize * INITIAL_ESTIMATED_ROW_BYTES,
+                        context::isAborted
+                );
+                boolean reservationTransferred = false;
+                try {
+                    // reserve可能因全局预算不足而等待；拿到额度后必须重新检查，防止drain期间发起新SQL。
+                    drainOperationId = context.tryBeginReadBatch();
+                    if (drainOperationId != null) {
+                        context.markDrainPartial(drainOperationId);
+                        offerEndSignals(context);
+                        log.warn("===> ES-Import reader stopped for drain after memory wait. operationId={}, table={}, read={}, lastId={}",
+                                drainOperationId, config.getTableName(), context.getStatistics().getRead().get(), lastId);
+                        return;
+                    }
+                    if (context.isDeadlineReached()) {
+                        context.endReadBatch();
+                        context.markTimeoutPartial();
+                        offerEndSignals(context);
+                        return;
+                    }
+
+                    try {
+                        List<Map<String, Object>> rows = fetchPage(context, lastId, pageSize);
+                        if (rows.isEmpty()) {
+                            // 没有更多数据时通知所有Bulk工作线程退出，查询预留额度由finally归还。
+                            offerEndSignals(context);
+                            log.info("===> ES-Import read finished. table={}, read={}",
+                                    config.getTableName(), context.getStatistics().getRead().get());
+                            return;
+                        }
+
+                        reservation.resize(estimateBatchBytes(rows));
+
+                        // 使用当前页最后一条ID作为下一页游标，避免offset深分页。
+                        lastId = extractLastId(rows, idColumn);
+                        context.getStatistics().setLastId(lastId);
+                        context.getStatistics().getRead().addAndGet(rows.size());
+
+                        ImportBatch batch = context.createBatch(rows, lastId, reservation);
+                        reservationTransferred = true;
+                        offerBatch(context, batch);
+                        log.info("===> ES-Import read batch. table={}, sequence={}, size={}, reservedBytes={}, lastId={}, read={}/{}",
+                                config.getTableName(),
+                                batch.sequence(),
+                                rows.size(),
+                                reservation.bytes(),
+                                lastId,
+                                context.getStatistics().getRead().get(),
+                                context.getStatistics().getTotal().get());
+
+                        if (rows.size() < pageSize) {
+                            // 当前页不足一整页，说明已读到最后一页，避免再次查询空页。
+                            offerEndSignals(context);
+                            log.info("===> ES-Import read finished. table={}, read={}",
+                                    config.getTableName(), context.getStatistics().getRead().get());
+                            return;
+                        }
+                    } finally {
+                        context.endReadBatch();
+                    }
+                } finally {
+                    if (!reservationTransferred) {
+                        reservation.close();
+                    }
+                }
             }
-
-            List<Map<String, Object>> rows = fetchPage(context, lastId, pageSize);
-            if (rows.isEmpty()) {
-                // 没有更多数据时通知所有Bulk工作线程退出。
-                offerEndSignals(context);
-                log.info("===> ES-Import read finished. table={}, read={}",
-                        config.getTableName(), context.getStatistics().getRead().get());
-                return;
-            }
-
-            // 使用当前页最后一条ID作为下一页游标，避免offset深分页。
-            lastId = extractLastId(rows, idColumn);
-            context.getStatistics().setLastId(lastId);
-            context.getStatistics().getRead().addAndGet(rows.size());
-
-            offerBatch(context, rows);
-            log.info("===> ES-Import read batch. table={}, size={}, lastId={}, read={}/{}",
-                    config.getTableName(),
-                    rows.size(),
-                    lastId,
-                    context.getStatistics().getRead().get(),
-                    context.getStatistics().getTotal().get());
-
-            if (rows.size() < pageSize) {
-                // 当前页不足一整页，说明已读到最后一页，避免再次查询空页。
-                offerEndSignals(context);
-                log.info("===> ES-Import read finished. table={}, read={}",
-                        config.getTableName(), context.getStatistics().getRead().get());
-                return;
-            }
+        } finally {
+            context.markReaderStopped();
         }
+    }
+
+    /**
+     * 按首行JSON体积估算当前批次占用，避免逐行序列化增加读取开销。
+     */
+    private long estimateBatchBytes(List<Map<String, Object>> rows) {
+        int firstRowBytes;
+        try {
+            firstRowBytes = objectMapper.writeValueAsBytes(rows.getFirst()).length;
+        } catch (Exception e) {
+            // 估算失败不影响读取，继续使用查询前的保守默认行大小。
+            firstRowBytes = INITIAL_ESTIMATED_ROW_BYTES;
+        }
+        double estimated = (double) Math.max(1, firstRowBytes) * rows.size() * BATCH_SIZE_SAFE_FACTOR;
+        return Math.max(1L, (long) Math.ceil(estimated));
     }
 
     /**
@@ -230,9 +330,9 @@ public class JdbcDataReader {
     /**
      * 将当前批次放入阻塞队列；队列满时自然阻塞，形成读写背压。
      */
-    private void offerBatch(ImportContext context, List<Map<String, Object>> rows) {
+    private void offerBatch(ImportContext context, ImportBatch batch) {
         try {
-            while (!context.getQueue().offer(rows, QUEUE_OFFER_TIMEOUT_SECONDS, TimeUnit.SECONDS)) {
+            while (!context.getQueue().offer(batch, QUEUE_OFFER_TIMEOUT_SECONDS, TimeUnit.SECONDS)) {
                 // 队列满时持续检查中止标记，避免Bulk已失败但Reader仍永久等待。
                 checkAbort(context);
             }
@@ -259,10 +359,10 @@ public class JdbcDataReader {
      * 为每个Bulk工作线程投递一个结束标记。
      */
     private void offerEndSignals(ImportContext context) {
-        int workerCount = context.getProperties().getWorkerCount();
+        int workerCount = context.getProperties().getTPlusOne().getWorkerCount();
         for (int i = 0; i < workerCount; i++) {
-            // 每个Bulk工作线程需要一个空批次作为结束信号。
-            offerBatch(context, List.of());
+            // 每个Bulk工作线程需要一个独立结束信号。
+            offerBatch(context, ImportBatch.workerEndSignal());
         }
     }
 

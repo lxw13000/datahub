@@ -2,7 +2,7 @@ package com.tsd.sano.es.importer.notify;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
-import com.tsd.sano.es.importer.pipeline.config.EsImportProperties;
+import com.tsd.sano.es.core.config.NotifyProperties;
 import org.apache.commons.lang3.StringUtils;
 import org.springframework.stereotype.Component;
 
@@ -34,16 +34,16 @@ public class DingTalkImportNotifier implements ImportNotifier {
      */
     private static final Duration REQUEST_TIMEOUT = Duration.ofSeconds(10);
 
-    private final EsImportProperties properties;
+    private final NotifyProperties properties;
     private final ObjectMapper objectMapper;
     private final HttpClient httpClient = HttpClient.newBuilder()
             .connectTimeout(REQUEST_TIMEOUT)
             .build();
 
     /**
-     * 注入导入配置和JSON序列化器。
+     * 注入消息配置和JSON序列化器。
      */
-    public DingTalkImportNotifier(EsImportProperties properties, ObjectMapper objectMapper) {
+    public DingTalkImportNotifier(NotifyProperties properties, ObjectMapper objectMapper) {
         this.properties = properties;
         this.objectMapper = objectMapper;
     }
@@ -53,7 +53,7 @@ public class DingTalkImportNotifier implements ImportNotifier {
      */
     @Override
     public void send(ImportNotifyMessage message) throws Exception {
-        EsImportProperties.NotifyChannelConfig config = properties.getNotify().getChannels().getDingtalk();
+        NotifyProperties.Channel config = properties.getDingtalk();
         if (!config.isEnabled() || StringUtils.isBlank(config.getWebhookUrl())) {
             return;
         }

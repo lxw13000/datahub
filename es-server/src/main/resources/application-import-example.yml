@@ -3,6 +3,8 @@ spring:
     active: prod
 
 sano:
+  # all / query；两种模式都开放查询，query模式从代码层禁止启动T+1和polling同步工作。
+  server-mode: all
   es:
     uris: ${ES_URIS:127.0.0.1:9201}
     username: ${ES_USERNAME:elastic}
@@ -13,50 +15,93 @@ sano:
     max-conn-total: 100
     max-conn-per-route: 20
 
-    import:
-      # 默认关闭；确认ES和数据库配置无误后再打开
-      task-enabled: false
-      # 每天02:30导入昨天的数据
-      cron: "0 30 2 * * ?"
-      # 每轮调度最多运行480分钟，超时后不再启动下一条待执行任务
-      max-run-minutes: 480
-      # 每批读取数据库数量
-      read-batch-size: 3000
-      # Bulk线程数
-      worker-count: 4
-      # BlockingQueue 队列缓存容量
-      queue-capacity: 30
-      # 每次Bulk文档数
-      bulk-actions: 3000
-      # 或每次bulk累计8MB立即发送，单位MB
-      bulk-size-mb: 8
-      # 最大重试次数
-      retry-times: 3
-      # Retry等待(ms)
-      retry-interval: 1000
-      # 失败文档数超过该值时不绑定alias
-      max-failed-documents: 1000
-      # 失败率超过该值时不绑定alias，0.001 = 0.1%
-      max-failure-rate: 0.001
-      # 是否开启导入监控
-      enable-monitor: true
+  notify:
+    # 消息服务总开关；关闭时业务即使调用通知接口也不会发送。
+    enabled: false
+    # 飞书/Lark机器人配置；关闭或webhook地址为空时跳过该通道。
+    lark:
+      # 飞书/Lark机器人开关。
+      enabled: false
+      # 飞书/Lark机器人webhook地址。
+      webhook-url: ${LARK_WEBHOOK_URL:}
+      # 机器人签名密钥；未启用签名时留空。
+      secret: ${LARK_WEBHOOK_SECRET:}
+    # 钉钉机器人配置；关闭或webhook地址为空时跳过该通道。
+    dingtalk:
+      # 钉钉机器人开关。
+      enabled: false
+      # 钉钉机器人webhook地址。
+      webhook-url: ${DINGTALK_WEBHOOK_URL:}
+      # 机器人签名密钥；未启用签名时留空。
+      secret: ${DINGTALK_WEBHOOK_SECRET:}
 
-      # 单机Docker ES建议保持0副本
-      # 导入期间是否关闭Refresh
+  import:
+    # 跨T+1、polling和未来MQ同步共享的资源协调参数。
+    common:
+      # 部署drain等待Reader、队列、Bulk和任务终态安全收敛的最长秒数。
+      drain-timeout-seconds: 600
+      write:
+        # 所有同步引擎合计允许的在途ES Bulk请求数。
+        global-bulk-concurrency: 3
+        # polling有等待请求时为其保留的Bulk并发数。
+        polling-reserved-concurrency: 2
+        # polling空闲时T+1最多可使用的Bulk并发数。
+        t-plus-one-max-concurrency: 3
+        # 所有同步引擎排队、在途和重试批次的合计内存预算。
+        global-queue-max-bytes: 128MB
+
+    # T+1独有参数；polling和未来MQ分别维护自己的读取、队列、Bulk及重试配置。
+    t-plus-one:
+      # T+1同步总开关；关闭后定时任务、手工导入和后台流水线均不执行。
+      enabled: false
+      # 每天02:30导入昨天的数据。
+      cron: "0 30 2 * * ?"
+      # 每轮调度最大运行分钟数；到期后不再启动下一条待执行任务。
+      max-run-minutes: 480
+      # 每轮查询任务索引时最多拉取的待执行任务数。
+      task-fetch-limit: 100
+      # Reader每批从MySQL读取的数据量。
+      read-batch-size: 3000
+      # 并行消费Reader队列的Bulk Worker数量。
+      worker-count: 4
+      # Reader到Bulk之间的批次队列容量。
+      queue-capacity: 30
+      # 单次ES Bulk请求的最大文档数。
+      bulk-actions: 3000
+      # 单次ES Bulk请求的目标大小上限，单位MB。
+      bulk-size-mb: 8
+      # Bulk请求级异常的最大重试次数，不包含首次请求。
+      retry-times: 3
+      # Bulk重试等待时间，单位毫秒。
+      retry-interval: 1000
+      # 失败文档数超过该值时不切换Alias。
+      max-failed-documents: 1000
+      # 失败率超过该值时不切换Alias，0.001表示0.1%。
+      max-failure-rate: 0.001
+      # 是否输出T+1导入过程监控日志。
+      enable-monitor: true
+      # T+1批量写入期间是否临时关闭索引自动Refresh。
       disable-refresh: true
-      # 导入期间是否关闭副本
+      # T+1批量写入期间是否临时将索引副本数调整为0。
       disable-replica: true
 
-      tables:
-        - enabled: true
-          index-alias: sano_wallet_coin_record
-          table-name: sano_wallet_coin_record
-          mapping-file: sano_wallet_coin_record.json
-          id-column: id
-          dt-column: dt
-          # 导入完成是否删除该表历史索引
-          delete-history-index: false
-          # 该表历史索引保留天数
-          reserve-days: 30
-          # where-sql为空时自动使用 dt = importDate
-          where-sql:
+    # T+1与polling共用同一表目录；enabled=false时两种引擎都忽略该表。
+    # index-alias是业务查询Alias，table-name是MySQL源表，mapping-file位于resources/esmapping。
+    # sync-mode未配置时默认t-plus-one；polling首次启动还必须配置bootstrap-start-date。
+    # id-column用于MySQL游标和ES文档ID；dt-column/dt-column-type/where-sql决定日期查询条件。
+    # delete-history-index和reserve-days控制成功导入后的历史索引清理。
+    tables:
+      - enabled: true
+        index-alias: sano_wallet_coin_record
+        table-name: sano_wallet_coin_record
+        mapping-file: sano_wallet_coin_record.json
+        # 单表自动同步模式；未配置时默认t-plus-one，polling模式需同时配置bootstrap-start-date。
+        sync-mode: t-plus-one
+        id-column: id
+        dt-column: dt
+        # 导入完成是否删除该表历史索引
+        delete-history-index: false
+        # 该表历史索引保留天数
+        reserve-days: 30
+        # where-sql为空时自动使用 dt = importDate
+        where-sql:
