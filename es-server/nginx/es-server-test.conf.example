@@ -1,0 +1,52 @@
+# 测试环境查询后端。9003是常驻all实例，9004是部署期间临时query实例。
+upstream es_server_test_query_backend {
+    server 127.0.0.1:9003 max_fails=1 fail_timeout=5s;
+    server 127.0.0.1:9004 backup max_fails=1 fail_timeout=5s;
+    keepalive 32;
+}
+
+# 外部调用保持原域名和80端口不变。
+server {
+    client_max_body_size 200m;
+    listen 80;
+    server_name es-server-test.fofunlive.net;
+
+    location / {
+        proxy_pass http://es_server_test_query_backend;
+        proxy_http_version 1.1;
+        proxy_set_header Connection "";
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_read_timeout 300s;
+        proxy_send_timeout 300s;
+        proxy_connect_timeout 60s;
+        proxy_next_upstream error timeout http_502 http_503 http_504;
+        proxy_next_upstream_tries 2;
+        proxy_redirect off;
+    }
+}
+
+# 内部服务统一改用“服务器内网IP:9103”，与Docker后端9003/9004分离。
+server {
+    client_max_body_size 200m;
+    listen 9103;
+    server_name _;
+
+    location / {
+        proxy_pass http://es_server_test_query_backend;
+        proxy_http_version 1.1;
+        proxy_set_header Connection "";
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_read_timeout 300s;
+        proxy_send_timeout 300s;
+        proxy_connect_timeout 60s;
+        proxy_next_upstream error timeout http_502 http_503 http_504;
+        proxy_next_upstream_tries 2;
+        proxy_redirect off;
+    }
+}
