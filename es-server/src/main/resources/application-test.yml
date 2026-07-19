@@ -61,11 +61,11 @@ sano:
 
   notify:
     # 同步任务通知总开关，测试环境默认关闭，避免调试误发。
-    enabled: ${SANO_NOTIFY_ENABLED:false}
+    enabled: ${SANO_NOTIFY_ENABLED:true}
     # 飞书/Lark机器人配置；关闭或webhook地址为空时跳过该通道。
     lark:
       # 飞书/Lark机器人开关。
-      enabled: ${LARK_NOTIFY_ENABLED:false}
+      enabled: ${LARK_NOTIFY_ENABLED:true}
       # 飞书/Lark机器人webhook地址。
       webhook-url: ${LARK_WEBHOOK_URL:https://open.larksuite.com/open-apis/bot/v2/hook/c1af0ddb-8ba5-4dae-a0e2-ecc476bcc5fd}
       # 机器人签名密钥；未启用签名时留空。

@@ -40,6 +40,8 @@ logging:
     com.zaxxer.hikari: INFO
 
 sano:
+  # all与query都开放查询；query只关闭T+1和未来polling同步能力。
+  server-mode: ${SANO_SERVER_MODE:all}
   log:
     # 生产环境保留周期较长，便于追踪历史同步问题。
     max-file-size: 100MB
@@ -47,6 +49,7 @@ sano:
     total-size-cap: 10GB
     async-queue-size: 8192
   es:
+    # 宿主机直接运行时访问正式ES的9201端口；Docker部署由Compose覆盖为elasticsearch8:9200。
     uris: ${ES_URIS:127.0.0.1:9201}
     username: ${ES_USERNAME:elastic}
     password: ${ES_PASSWORD:es2peter}
@@ -92,8 +95,8 @@ sano:
         global-queue-max-bytes: ${SANO_ES_SYNC_GLOBAL_QUEUE_MAX_BYTES:128MB}
 
     t-plus-one:
-      # T+1同步总开关；关闭后定时任务、手工导入和后台流水线均不执行。
-      enabled: true
+      # 正式主实例默认开启T+1；临时query实例由Compose覆盖为false。
+      enabled: ${SANO_ES_IMPORT_T_PLUS_ONE_ENABLED:true}
       # 每天03:00导入昨天的数据。
       cron: "0 0 3 * * ?"
       # 每轮调度最大运行分钟数；到期后不再启动下一条待执行任务。
@@ -135,6 +138,8 @@ sano:
         index-alias: sano_wallet_coin_record
         table-name: sano_wallet_coin_record
         mapping-file: sano_wallet_coin_record.json
+        # 版本A全部保持T+1，polling引擎完成前不得改为polling。
+        sync-mode: t-plus-one
         # 导入完成是否删除该表历史索引
         delete-history-index: true
         # 该表历史索引保留天数
@@ -149,6 +154,7 @@ sano:
         index-alias: sano_wallet_diamond_record
         table-name: sano_wallet_diamond_record
         mapping-file: sano_wallet_diamond_record.json
+        sync-mode: t-plus-one
         # 导入完成是否删除该表历史索引
         delete-history-index: true
         # 该表历史索引保留天数
@@ -163,6 +169,7 @@ sano:
         index-alias: sano_wallet_lucky_diamond_record_10m
         table-name: sano_wallet_lucky_diamond_record_10m
         mapping-file: sano_wallet_lucky_diamond_record_10m.json
+        sync-mode: t-plus-one
         # 导入完成是否删除该表历史索引
         delete-history-index: true
         # 该表历史索引保留天数
@@ -177,6 +184,7 @@ sano:
         index-alias: sano_game_record
         table-name: sano_game_record
         mapping-file: sano_game_record.json
+        sync-mode: t-plus-one
         # 导入完成是否删除该表历史索引
         delete-history-index: true
         # 该表历史索引保留天数

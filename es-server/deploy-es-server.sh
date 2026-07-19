@@ -5,17 +5,18 @@ set -Eeuo pipefail
 # safe：已上线版本A以后使用，query-only接管、统一drain，失败时cancel或回滚。
 # legacy：仅用于首次发布版本A，旧镜像没有server-mode与drain能力时接受一次维护窗口。
 
-PROJECT_NAME="${PROJECT_NAME:-sano-es-server}"
-SERVICE_NAME="${SERVICE_NAME:-es-server}"
-QUERY_SERVICE_NAME="${QUERY_SERVICE_NAME:-es-server-query}"
-CONTAINER_NAME="${CONTAINER_NAME:-sano-es-server}"
-QUERY_CONTAINER_NAME="${QUERY_CONTAINER_NAME:-sano-es-server-query}"
+# 正式环境资源名和端口固定，防止与同机测试环境交叉操作。
+PROJECT_NAME="sano-es-server"
+SERVICE_NAME="es-server"
+QUERY_SERVICE_NAME="es-server-query"
+CONTAINER_NAME="sano-es-server"
+QUERY_CONTAINER_NAME="sano-es-server-query"
 IMAGE_NAME="${ES_SERVER_IMAGE:-lxw13000/sano-es-server}"
 IMAGE_TAG="${ES_SERVER_IMAGE_TAG:-latest}"
 IMAGE="${IMAGE_NAME}:${IMAGE_TAG}"
 NETWORK_NAME="${NETWORK_NAME:-sano-net}"
-SERVER_PORT="${SERVER_PORT:-8002}"
-QUERY_PORT="${QUERY_PORT:-8003}"
+SERVER_PORT="8002"
+QUERY_PORT="8003"
 START_TIMEOUT="${START_TIMEOUT:-180}"
 # Compose detached启动命令的独立超时；防止客户端已启动容器却长期不退出，导致/ready检查无法执行。
 COMPOSE_UP_TIMEOUT="${COMPOSE_UP_TIMEOUT:-30}"
@@ -24,21 +25,27 @@ POLL_INTERVAL="${POLL_INTERVAL:-2}"
 STABLE_SECONDS="${STABLE_SECONDS:-20}"
 LOG_TAIL_LINES="${LOG_TAIL_LINES:-120}"
 DEPLOY_MODE="${DEPLOY_MODE:-safe}"
-SYNC_API_TOKEN="${SYNC_API_TOKEN:-}"
-DEPLOY_LOCK_DIR="${DEPLOY_LOCK_DIR:-/tmp/sano-es-server-deploy.lock}"
+# 内部接口使用es-server代码内置的固定Token；保留环境变量覆盖能力，便于以后统一轮换。
+SYNC_API_TOKEN="${SYNC_API_TOKEN:-sano-es-Z1q7n2V4m8K5x9P3d6R0h4T8w2Y7c1F}"
+DEPLOY_LOCK_DIR="/tmp/sano-es-server-deploy.lock"
 NGINX_HANDOFF_PRECONFIGURED="${NGINX_HANDOFF_PRECONFIGURED:-false}"
 NGINX_TEST_COMMAND="${NGINX_TEST_COMMAND:-}"
 NGINX_RELOAD_COMMAND="${NGINX_RELOAD_COMMAND:-}"
-# 必须是真实业务查询，safe模式在仅query容器承接时和新主恢复后各执行一次。
-NGINX_SMOKE_COMMAND="${NGINX_SMOKE_COMMAND:-}"
+# safe模式在仅query容器承接时和新主恢复后各验证一次外部域名与内部8102入口。
+PUBLIC_QUERY_BASE_URL="${PUBLIC_QUERY_BASE_URL:-http://es-server.fofunlive.net}"
+INTERNAL_QUERY_BASE_URL="${INTERNAL_QUERY_BASE_URL:-http://127.0.0.1:8102}"
+if [ -z "${NGINX_SMOKE_COMMAND:-}" ]; then
+  NGINX_SMOKE_COMMAND="curl -fsS --connect-timeout 5 --max-time 30 -H 'token: ${SYNC_API_TOKEN}' '${PUBLIC_QUERY_BASE_URL}/ready' >/dev/null && curl -fsS --connect-timeout 5 --max-time 30 -H 'token: ${SYNC_API_TOKEN}' '${INTERNAL_QUERY_BASE_URL}/ready' >/dev/null"
+fi
 # 版本B可配置检查命令验证租约、表状态和checkpoint推进；版本A允许留空。
 POST_START_SYNC_CHECK_COMMAND="${POST_START_SYNC_CHECK_COMMAND:-}"
 
-# Compose变量必须导出，否则脚本覆盖端口、容器名或网络名时会与实际容器不一致。
-export NETWORK_NAME CONTAINER_NAME QUERY_CONTAINER_NAME SERVER_PORT QUERY_PORT
+# 正式常驻实例固定为all；Compose变量必须导出，确保实际容器与脚本检查目标一致。
+SANO_SERVER_MODE="all"
+export NETWORK_NAME CONTAINER_NAME QUERY_CONTAINER_NAME SERVER_PORT QUERY_PORT SANO_SERVER_MODE
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-COMPOSE_FILE="${COMPOSE_FILE:-${SCRIPT_DIR}/docker-compose.yml}"
+COMPOSE_FILE="${SCRIPT_DIR}/docker-compose.yml"
 MAIN_BASE_URL="http://127.0.0.1:${SERVER_PORT}"
 QUERY_BASE_URL="http://127.0.0.1:${QUERY_PORT}"
 
@@ -170,7 +177,7 @@ ensure_prerequisites() {
     || fail "DEPLOY_MODE只支持safe或legacy。"
   [ "${SERVICE_NAME}" = "es-server" ] && [ "${QUERY_SERVICE_NAME}" = "es-server-query" ] \
     || fail "compose服务名固定为es-server与es-server-query，不允许覆盖。"
-  [ -n "${SYNC_API_TOKEN}" ] || fail "部署必须通过SYNC_API_TOKEN提供内部接口Token。"
+  [ -n "${SYNC_API_TOKEN}" ] || fail "部署使用的内部接口Token不能为空。"
 
   if ! docker network inspect "${NETWORK_NAME}" >/dev/null 2>&1; then
     log "Docker网络${NETWORK_NAME}不存在，开始创建。"
@@ -193,11 +200,16 @@ ensure_prerequisites() {
 
 capture_stable_image() {
   container_exists "${CONTAINER_NAME}" || return 0
-  container_running "${CONTAINER_NAME}" || fail "主容器存在但未运行，不能执行安全升级。"
-
   OLD_IMAGE_ID="$(inspect_field "${CONTAINER_NAME}" '{{.Image}}')"
   [ -n "${OLD_IMAGE_ID}" ] || fail "无法取得当前稳定镜像ID。"
   OLD_IMAGE_REFERENCE="$(inspect_field "${CONTAINER_NAME}" '{{.Config.Image}}')"
+
+  if ! container_running "${CONTAINER_NAME}"; then
+    [ "${DEPLOY_MODE}" = "legacy" ] \
+      || fail "正式主容器存在但未运行，safe模式拒绝替换；确认旧容器无需恢复后使用DEPLOY_MODE=legacy。"
+    log "WARN: 正式主容器已停止；legacy模式将保留旧镜像后替换该容器。reference=${OLD_IMAGE_REFERENCE:-unknown}, id=${OLD_IMAGE_ID}"
+    return 0
+  fi
   log "已识别当前稳定镜像：reference=${OLD_IMAGE_REFERENCE:-unknown}, id=${OLD_IMAGE_ID}"
 }
 
@@ -458,9 +470,12 @@ cancel_drain_best_effort() {
 
 stop_and_remove_main() {
   MAIN_REPLACED=1
-  log "停止并删除已安全排空的主容器。"
-  compose_cmd -f "${COMPOSE_FILE}" -p "${PROJECT_NAME}" stop "${SERVICE_NAME}"
-  compose_cmd -f "${COMPOSE_FILE}" -p "${PROJECT_NAME}" rm -f "${SERVICE_NAME}"
+  log "停止并删除正式主容器：${CONTAINER_NAME}"
+  # 历史容器可能由不同Compose项目创建，按固定正式容器名处理，避免触碰同机测试容器。
+  if container_running "${CONTAINER_NAME}"; then
+    docker stop --time 30 "${CONTAINER_NAME}"
+  fi
+  container_exists "${CONTAINER_NAME}" && docker rm -f "${CONTAINER_NAME}"
   DRAIN_ACTIVE=0
 }
 
@@ -536,7 +551,7 @@ rollback_main_best_effort() {
   fi
   ensure_query_handoff_running_best_effort
   log "开始回滚主实例：${RESTORE_IMAGE}"
-  compose_cmd -f "${COMPOSE_FILE}" -p "${PROJECT_NAME}" rm -sf "${SERVICE_NAME}" >/dev/null 2>&1 || true
+  container_exists "${CONTAINER_NAME}" && docker rm -f "${CONTAINER_NAME}" >/dev/null 2>&1 || true
   start_main_with_tag "${RESTORE_TAG}" || return 1
 
   local start_ts now
@@ -579,7 +594,7 @@ on_exit() {
 main() {
   trap 'on_exit $?' EXIT
   trap 'exit 130' INT TERM
-  log "开始部署es-server。mode=${DEPLOY_MODE}, image=${IMAGE}, compose=${COMPOSE_FILE}"
+  log "开始部署正式环境es-server。mode=${DEPLOY_MODE}, image=${IMAGE}, compose=${COMPOSE_FILE}"
   acquire_deploy_lock
   ensure_prerequisites
   capture_stable_image
@@ -622,7 +637,7 @@ main() {
 
   # 所有严格验证和临时容器清理完成后才解除退出保护。rollback标签故意保留供事后回滚。
   DEPLOY_SUCCEEDED=1
-  log "部署完成。原稳定镜像：${RESTORE_IMAGE:-无旧镜像}；安全回滚标签：${ROLLBACK_IMAGE:-未创建（复用原版本标签）}"
+  log "正式环境部署完成。原稳定镜像：${RESTORE_IMAGE:-无旧镜像}；安全回滚标签：${ROLLBACK_IMAGE:-未创建（复用原版本标签）}"
 }
 
 if [ "${BASH_SOURCE[0]}" = "$0" ]; then

@@ -175,7 +175,7 @@ ensure_prerequisites() {
     || fail "DEPLOY_MODE只支持safe或legacy。"
   [ "${SERVICE_NAME}" = "es-server" ] && [ "${QUERY_SERVICE_NAME}" = "es-server-query" ] \
     || fail "compose服务名固定为es-server与es-server-query，不允许覆盖。"
-  [ -n "${SYNC_API_TOKEN}" ] || fail "部署必须通过SYNC_API_TOKEN提供内部接口Token。"
+  [ -n "${SYNC_API_TOKEN}" ] || fail "部署使用的内部接口Token不能为空。"
 
   if ! docker network inspect "${NETWORK_NAME}" >/dev/null 2>&1; then
     log "Docker网络${NETWORK_NAME}不存在，开始创建。"

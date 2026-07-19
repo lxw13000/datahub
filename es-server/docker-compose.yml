@@ -4,6 +4,7 @@ networks:
     name: ${NETWORK_NAME:-sano-net}
 
 services:
+  # 正式环境常驻实例：查询始终开放，server-mode=all时启用T+1同步。
   es-server:
     build:
       context: .
@@ -25,6 +26,9 @@ services:
       SERVER_PORT: ${SERVER_PORT:-8002}
       LOG_DIR: /app/logs/es-server
       SANO_SERVER_MODE: ${SANO_SERVER_MODE:-all}
+      SANO_ES_IMPORT_T_PLUS_ONE_ENABLED: ${SANO_ES_IMPORT_T_PLUS_ONE_ENABLED:-true}
+      # 版本A尚未实现延迟轮询，正式环境必须显式关闭。
+      SANO_ES_POLLING_ENABLED: "false"
 
       # Java运行参数。正式服务器还有其他服务时，限制导入服务资源占用。
       JAVA_OPTS: "-Xms1g -Xmx1536m -XX:+UseG1GC -XX:MaxGCPauseMillis=200 -XX:+HeapDumpOnOutOfMemoryError -XX:HeapDumpPath=/app/logs/es-server"
@@ -38,6 +42,7 @@ services:
       ES_USERNAME: ${ES_USERNAME:-elastic}
       ES_PASSWORD: ${ES_PASSWORD:-es2peter}
     ports:
+      # Docker后端只供同机Nginx和部署脚本访问；外部走正式域名，内部走Nginx的8102端口。
       - "127.0.0.1:${SERVER_PORT:-8002}:${SERVER_PORT:-8002}"
     volumes:
       - ./logs:/app/logs/es-server
