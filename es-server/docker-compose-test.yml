@@ -35,8 +35,8 @@ services:
       ES_USERNAME: ${ES_USERNAME:-elastic}
       ES_PASSWORD: ${ES_PASSWORD:-es2peter}
     ports:
-      # 容器端口只供同机Nginx和部署脚本访问；外部业务走测试域名，内部业务走Nginx的9103端口。
-      - "127.0.0.1:${SERVER_PORT:-9003}:${SERVER_PORT:-9003}"
+      # 发布到宿主机全部网络接口；Nginx在本机仍通过127.0.0.1:9003访问。
+      - "${SERVER_PORT:-9003}:${SERVER_PORT:-9003}"
     volumes:
       - ./logs-test:/app/logs/es-server
 
@@ -69,6 +69,6 @@ services:
       ES_USERNAME: ${ES_USERNAME:-elastic}
       ES_PASSWORD: ${ES_PASSWORD:-es2peter}
     ports:
-      - "127.0.0.1:${QUERY_PORT:-9004}:${QUERY_PORT:-9004}"
+      - "${QUERY_PORT:-9004}:${QUERY_PORT:-9004}"
     volumes:
       - ./logs-test-query:/app/logs/es-server-query

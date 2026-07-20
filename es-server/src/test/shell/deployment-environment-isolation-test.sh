@@ -49,12 +49,16 @@ assert_contains "${TEST_DEPLOY}" 'http://127.0.0.1:9103'
 assert_contains "${TEST_DEPLOY}" '/tmp/sano-es-server-test-deploy.lock'
 assert_contains "${TEST_DEPLOY}" 'SYNC_API_TOKEN="${SYNC_API_TOKEN:-sano-es-Z1q7n2V4m8K5x9P3d6R0h4T8w2Y7c1F}"'
 
-# Compose只向回环地址暴露各自Docker后端，版本A的all/query均显式关闭Polling。
-assert_contains "${PROD_COMPOSE}" '127.0.0.1:${SERVER_PORT:-8002}:${SERVER_PORT:-8002}'
-assert_contains "${PROD_COMPOSE}" '127.0.0.1:${QUERY_PORT:-8003}:${QUERY_PORT:-8003}'
+# Compose向宿主机全部网络接口发布各自后端端口，版本A的all/query均显式关闭Polling。
+assert_contains "${PROD_COMPOSE}" '${SERVER_PORT:-8002}:${SERVER_PORT:-8002}'
+assert_contains "${PROD_COMPOSE}" '${QUERY_PORT:-8003}:${QUERY_PORT:-8003}'
 assert_contains "${PROD_COMPOSE}" 'SANO_ES_POLLING_ENABLED: "false"'
-assert_contains "${TEST_COMPOSE}" '127.0.0.1:${SERVER_PORT:-9003}:${SERVER_PORT:-9003}'
-assert_contains "${TEST_COMPOSE}" '127.0.0.1:${QUERY_PORT:-9004}:${QUERY_PORT:-9004}'
+assert_contains "${TEST_COMPOSE}" '${SERVER_PORT:-9003}:${SERVER_PORT:-9003}'
+assert_contains "${TEST_COMPOSE}" '${QUERY_PORT:-9004}:${QUERY_PORT:-9004}'
+assert_absent "${PROD_COMPOSE}" '127.0.0.1:${SERVER_PORT:-8002}'
+assert_absent "${PROD_COMPOSE}" '127.0.0.1:${QUERY_PORT:-8003}'
+assert_absent "${TEST_COMPOSE}" '127.0.0.1:${SERVER_PORT:-9003}'
+assert_absent "${TEST_COMPOSE}" '127.0.0.1:${QUERY_PORT:-9004}'
 
 # 两份Nginx配置允许共享80端口，但域名、upstream、内部端口和Docker后端必须完全分离。
 assert_contains "${PROD_NGINX}" 'server 127.0.0.1:8002 max_fails=1 fail_timeout=5s;'

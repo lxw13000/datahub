@@ -60,11 +60,11 @@ flowchart LR
 | --- | --- | --- |
 | `es-server-test.fofunlive.net:80` | 外部业务访问 `es-server` | 是 |
 | `服务器内网IP:9103` | 内部业务访问 `es-server` | 是 |
-| `127.0.0.1:9003` | Docker `all` 实例，只供同机 Nginx 和部署脚本访问 | 是 |
-| `127.0.0.1:9004` | Docker `query` 实例，只在 safe 部署期间存在 | 否 |
+| `0.0.0.0:9003` | Docker `all` 实例宿主机端口 | 是 |
+| `0.0.0.0:9004` | Docker `query` 实例宿主机端口，只在 safe 部署期间存在 | 否 |
 | `es-test.fofunlive.net:80` | 测试 Elasticsearch 外部代理，转发到 `127.0.0.1:9211` | 是 |
 
-外部业务继续使用原域名，不需要因发布方式变化而修改。内部业务统一使用 `服务器内网IP:9103`，不能直接依赖 Docker 后端端口 9003 或 9004。
+外部业务继续使用原域名，不需要因发布方式变化而修改。内部业务优先使用 `服务器内网IP:9103`；Docker 后端端口9003和9004虽然已监听全部网络接口，但业务不应直接依赖部署期间会启停的临时 query 端口9004。
 
 ## 4. 文件和目录
 
@@ -298,14 +298,14 @@ export NGINX_HANDOFF_PRECONFIGURED=true
 3. 检查旧实例 drain 协议和协调器状态。
 4. 确认 Nginx 已配置 9004 backup。
 5. 复用可信原版本标签作为回滚镜像。
-6. 启动同一旧镜像的临时 `query` 容器，监听 `127.0.0.1:9004`。
+6. 启动同一旧镜像的临时 `query` 容器，监听宿主机全部网络接口的9004端口。
 7. 验证临时实例 `/ready=true` 且 `serviceMode=QUERY`。
 8. 拉取目标镜像。
 9. 请求旧 `all` 实例进入 drain。
 10. 等待 Reader、队列、Bulk 和活动任务安全排空。
 11. 停止并删除旧 `all` 容器。
 12. 通过外部域名和内部 9103 冒烟，此时查询由 9004 承接。
-13. 启动目标版本 `all` 容器，监听 `127.0.0.1:9003`。
+13. 启动目标版本 `all` 容器，监听宿主机全部网络接口的9003端口。
 14. 验证 `/ready=true`、`serviceMode=ALL` 和同步协调器 `RUNNING`。
 15. 再次通过外部域名和内部 9103 冒烟。
 16. 停止并删除临时 `query` 容器。
@@ -313,13 +313,13 @@ export NGINX_HANDOFF_PRECONFIGURED=true
 成功后的最终状态只有：
 
 ```text
-sano-es-server-test        all        127.0.0.1:9003
+sano-es-server-test        all        0.0.0.0:9003
 ```
 
 正常情况下不应保留：
 
 ```text
-sano-es-server-test-query  query      127.0.0.1:9004
+sano-es-server-test-query  query      0.0.0.0:9004
 ```
 
 ### 10.3 相同版本 safe 演练
@@ -652,14 +652,14 @@ ES_SERVER_IMAGE_TAG=目标版本 DEPLOY_MODE=safe NGINX_HANDOFF_PRECONFIGURED=tr
 | 正式 | `8002` | `8003` | `8102` | `9201` |
 | 测试 | `9003` | `9004` | `9103` | `9211` |
 
-其中，all 和临时 query 是仅供同机 Nginx、部署脚本访问的 Docker 后端端口；内部业务访问 Nginx 端口，不能直接依赖 all 或 query 后端端口。
+all 和临时 query 的宿主机端口监听全部网络接口；同机 Nginx 和部署脚本仍通过 `127.0.0.1` 访问。业务统一入口仍建议使用外部域名或内部 Nginx 端口，避免依赖部署期间可能启停的 query 后端。
 
 | 资源 | 正式环境 | 测试环境 |
 | --- | --- | --- |
 | es-server 外部域名 | `es-server.fofunlive.net` | `es-server-test.fofunlive.net` |
 | es-server 内部 Nginx 入口 | `服务器内网IP:8102` | `服务器内网IP:9103` |
-| all Docker 后端 | `127.0.0.1:8002` | `127.0.0.1:9003` |
-| query Docker 后端 | `127.0.0.1:8003` | `127.0.0.1:9004` |
+| all Docker 后端 | `0.0.0.0:8002` | `0.0.0.0:9003` |
+| query Docker 后端 | `0.0.0.0:8003` | `0.0.0.0:9004` |
 | Elasticsearch 外部域名 | `es.fofunlive.net` | `es-test.fofunlive.net` |
 | Elasticsearch 宿主机端口 | `9201` | `9211` |
 | 主容器 | `sano-es-server` | `sano-es-server-test` |
@@ -696,7 +696,7 @@ curl -fsS http://es-server.fofunlive.net/health
 curl -fsS http://es.fofunlive.net
 ```
 
-内部正式业务统一使用 `服务器内网IP:8102`，不能直接访问8002或8003。
+内部正式业务优先使用 `服务器内网IP:8102`；Docker 后端端口8002和8003虽然已监听全部网络接口，但业务不应直接依赖部署期间会启停的临时 query 端口8003。
 
 ### 18.2 正式环境首次版本A升级
 

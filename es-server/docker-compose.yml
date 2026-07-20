@@ -42,8 +42,8 @@ services:
       ES_USERNAME: ${ES_USERNAME:-elastic}
       ES_PASSWORD: ${ES_PASSWORD:-es2peter}
     ports:
-      # Docker后端只供同机Nginx和部署脚本访问；外部走正式域名，内部走Nginx的8102端口。
-      - "127.0.0.1:${SERVER_PORT:-8002}:${SERVER_PORT:-8002}"
+      # 发布到宿主机全部网络接口；Nginx在本机仍通过127.0.0.1:8002访问。
+      - "${SERVER_PORT:-8002}:${SERVER_PORT:-8002}"
     volumes:
       - ./logs:/app/logs/es-server
 
@@ -76,6 +76,6 @@ services:
       ES_USERNAME: ${ES_USERNAME:-elastic}
       ES_PASSWORD: ${ES_PASSWORD:-es2peter}
     ports:
-      - "127.0.0.1:${QUERY_PORT:-8003}:${QUERY_PORT:-8003}"
+      - "${QUERY_PORT:-8003}:${QUERY_PORT:-8003}"
     volumes:
       - ./logs-query:/app/logs/es-server-query
