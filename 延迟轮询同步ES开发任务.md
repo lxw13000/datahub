@@ -1,19 +1,19 @@
 # 延迟轮询同步 ES 开发任务
 
-> 基准文档：`延迟轮询同步ES设计文档.md`  
-> 当前阶段：版本 A 开发，polling 保持关闭。  
-> 更新日期：2026-07-16。
+> 基准文档：`延迟轮询同步ES设计文档.md`
+> 当前阶段：版本 A 已完成并上线，进入版本 B polling 开发阶段；polling 保持关闭。
+> 更新日期：2026-07-22。
 
 ## 1. 开发约束
 
-1. 先完成版本 A 的 T+1 安全断点、表模式兼容和部署基础能力，再开发并启用 polling。
+1. 版本 A 的 T+1 安全断点、表模式兼容和部署基础能力已完成并上线；版本 B 完成开发、测试和发布验收前不得启用 polling。
 2. 同一张表同一时期只能属于 `t-plus-one` 或 `polling` 一种自动同步模式。
 3. 类、公共方法、关键并发状态和持久字段必须有准确注释；普通直观语句不重复解释。
 4. 实现类保持流程集中，只有存在独立职责、复用价值或并发边界时才提取类或方法。
 5. 配置类和纯 Model 可使用 Lombok；并发状态机、资源生命周期类优先显式编写关键方法。
 6. 每个任务完成后执行定向测试；阶段完成后执行完整测试、故障恢复测试和配置兼容验证。
 
-## 2. 版本 A：保持 T+1 行为，补齐安全基础
+## 2. 版本 A：保持 T+1 行为，补齐安全基础（已上线）
 
 ### A1. T+1 连续批次安全断点
 
@@ -34,9 +34,9 @@
 
 状态：已完成。
 
-- [x] 在现有 `sano.es.import.tables` 增加 `sync-mode`、`bootstrap-start-date`。
+- [x] 在现有 `sano.import.tables` 增加 `sync-mode`、`bootstrap-start-date`。
 - [x] `sync-mode` 缺省为 `t-plus-one`，验证旧 YAML 行为不变。
-- [x] 启动时转换为不可变 `SyncTableDefinition`，集中校验表名、Alias、Mapping和日期字段。
+- [x] `EsImportProperties` 加载表配置时集中校验，并一次性生成不可变的T+1和polling分类集合。
 - [x] T+1 自动任务只处理 `t-plus-one` 表；当前手工历史回填入口也要求T+1归属，避免与未来polling并写。
 - [x] 校验同一 Alias 不得出现重复启用配置。
 
@@ -54,7 +54,7 @@
 状态：已完成。
 
 - [x] 支持`all / query`；两种模式均开放查询，query只关闭同步能力。
-- [x] 三种模式注册相同Bean；运行时门禁使query模式不提交T+1/polling工作、不启动同步链路。
+- [x] 两种模式注册相同Bean；运行时门禁使query模式不提交T+1/polling工作、不启动同步链路。
 - [x] 实现 `/internal/sync/drain`、`status`、`cancel`。
 - [x] T+1 在当前读取批次后停止，排空已入队Bulk并保存安全 `TIMEOUT_PARTIAL`。
 - [x] cancel 立即重新投递本次 drain 产生的 `TIMEOUT_PARTIAL`，不能等待下一次 Cron。
@@ -64,18 +64,26 @@
 
 ### A5. 版本 A 发布验收
 
-状态：待发布环境验收。
+状态：已完成并上线（2026-07-22）。
 
-- [ ] 所有表保持 `t-plus-one`，`polling.enabled=false`。
-- [ ] 对比升级前后任务生成、Alias、索引清理和通知行为。
-- [ ] 演练成功、部分失败、请求失败、超时、强停、cancel和回滚。
-- [ ] 验证只有一个`all`实例启用同步，临时`query`实例不启动任何同步工作。
+- [x] 所有线上表保持 `sync-mode: t-plus-one`，部署配置保持 `SANO_ES_POLLING_ENABLED=false`。
+- [x] 对比升级前后任务生成、Alias、索引清理和通知行为，T+1原有业务行为保持兼容。
+- [x] 通过自动化测试和发布演练覆盖成功、部分失败、请求失败、超时、强停、cancel和回滚。
+- [x] 验证只有一个`all`实例启用同步，临时`query`实例不启动任何同步工作。
+
+上线结论：
+
+- 正式环境常驻`all`实例承担查询和T+1同步，临时`query`实例只在safe部署期间承接查询。
+- 版本A已具备严格就绪、统一drain、查询接管和旧镜像回滚能力；后续常规升级使用safe模式。
+- polling Reader、checkpoint、租约、错误池和异步对账仍属于版本B范围，版本A上线不代表polling已启用。
 
 ## 3. 版本 B：按表启用 polling
 
+状态：待开发。开发和测试期间不得改变版本A线上表的 `t-plus-one` 归属。
+
 ### B1. 内部索引与持久模型
 
-- [ ] 创建 `sano_polling_sync_checkpoint`、`sano_sync_error`、`sano_sync_reconcile_task` Mapping。
+- [ ] 创建统一以`sano_sync_`开头的`sano_sync_polling_checkpoint`、`sano_sync_error`、`sano_sync_reconcile_task` Mapping；Polling专属索引保留`polling`语义，公共索引不绑定单一引擎名称。
 - [ ] checkpoint 每张 polling 表固定一个文档 ID。
 - [ ] 错误文档使用确定性 ID，重复重试只更新同一条记录。
 - [ ] 明确未解决错误和已解决错误的保留策略。

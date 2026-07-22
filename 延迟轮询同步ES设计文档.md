@@ -1,6 +1,6 @@
 # 延迟轮询同步 ES 设计文档
 
-> 状态：设计修订完成；基础能力版本A已编码，polling版本B尚未开始。修订日期：2026-07-16。
+> 状态：基础能力版本A已完成并上线；polling版本B待开发且保持关闭。修订日期：2026-07-22。
 
 ## 1. 目标与适用范围
 
@@ -17,9 +17,9 @@
 
 ### 1.1 当前实现基线与上线结论
 
-截至本文本次修订，基础能力版本A已完成编码：T+1连续批次安全断点、每表同步模式、共享写入资源、运行时服务角色、统一drain以及query-only部署脚本均已实现；polling引擎、checkpoint、错误池和对账仍未编码。因此：
+截至本文本次修订，基础能力版本A已完成编码并上线：T+1连续批次安全断点、每表同步模式、共享写入资源、运行时服务角色、统一drain以及query-only部署脚本均已实现；polling引擎、checkpoint、错误池和对账仍未编码。因此：
 
-1. 版本A能力已经进入程序，但仍需完成第A5阶段的真实发布环境演练。
+1. 版本A已经完成真实发布环境验收，正式环境常驻`all`实例继续运行T+1同步，后续更新使用safe部署流程。
 2. polling版本B及其验收完成前不得配置任何`sync-mode=polling`表。
 3. 完成版本 A、B 及第14章验收后，T+1 表和 polling 表可以在同一实例优雅共存、统一 drain 和恢复；同一张表仍只允许一种自动同步模式。
 
@@ -45,8 +45,9 @@ MySQL 同步表
 Elasticsearch 每日物理索引
 alias_yyyyMMdd
 
-同步状态索引 sano_polling_sync_checkpoint
+Polling同步状态索引 sano_sync_polling_checkpoint
 公共错误索引 / 错误日志 sano_sync_error
+异步对账任务索引 sano_sync_reconcile_task
     |
     v
 Lark 告警与日期完成对账通知
@@ -70,13 +71,12 @@ Lark 告警与日期完成对账通知
 
 ```yaml
 sano:
-  es:
-    import:
-      tables:
-        - table-name: sano_wallet_coin_record
-          index-alias: sano_wallet_coin_record
-          sync-mode: polling
-          bootstrap-start-date: 2026-07-16
+  import:
+    tables:
+      - table-name: sano_wallet_coin_record
+        index-alias: sano_wallet_coin_record
+        sync-mode: polling
+        bootstrap-start-date: 2026-07-16
 ```
 
 启动定位遵循以下固定优先级：
@@ -116,7 +116,7 @@ Spring 应用启动
 不同引擎沿用各自适合的持久模型，管理接口可以聚合展示，但不能把它们覆盖成一个通用 `status`：
 
 - 表定义中的 `enabled + sync-mode` 是持久业务归属，决定该表由哪个引擎自动同步。
-- polling 表的连续进度、租约和运行许可保存在 `sano_polling_sync_checkpoint`，字段如下。
+- polling 表的连续进度、租约和运行许可保存在 `sano_sync_polling_checkpoint`，字段如下。
 - T+1 每次日期任务的执行进度保存在现有 `sano_import_task`，继续使用 `PENDING / RUNNING / SUCCESS / TIMEOUT_PARTIAL / FAILED`；它没有 polling 的表租约和 checkpoint，也不能用一次任务状态覆盖表模式。
 - 两种引擎的日期一致性结果统一保存在 `sano_sync_reconcile_task`。polling checkpoint 可缓存最近一致性摘要，T+1 表则由状态接口读取最近对账任务；对账任务状态不改写同步任务状态。
 
@@ -181,7 +181,7 @@ polling 表的主要对应关系如下；T+1 表在同一接口中返回原生�
 | `t-plus-one` | 由现有 T+1 调度器按业务日期创建并执行 `sano_import_task` |
 | `polling` | 由延迟轮询协调器创建 Reader、队列、Bulk Workers、租约和 checkpoint |
 
-统一表目录调整为 `sano.import.tables`，完整保留 `enabled`、Alias、表名、Mapping、历史索引保留、ID、日期类型和 `where-sql` 等字段，只新增 `sync-mode` 与 `bootstrap-start-date`。T+1 和 polling 都从这里读取，不再创建第二份表配置。`es`、`import` 与 `notify` 是相互独立的服务级配置：
+统一表目录调整为 `sano.import.tables`，完整保留 `enabled`、Alias、表名、Mapping、历史索引保留、ID、日期类型和 `where-sql` 等字段，只新增 `sync-mode` 与 `bootstrap-start-date`。T+1 和 polling 都从这里读取，不再创建第二份表配置。`es`、`import` 与 `notify` 是相互独立的服务级配置。以下是版本B启用后的目标混合配置示例，不代表版本A线上配置：
 
 ```yaml
 sano:
@@ -257,8 +257,10 @@ sano:
 ```
 
 配置边界：`import.common`只保存跨引擎共享的drain、ES写入许可和总内存预算；
-`import.t-plus-one`保存T+1自己的Cron、读取批次、队列、Bulk、重试、失败阈值和索引优化参数；`notify`独立保存服务级通知开关和渠道，供导入及后续其他模块复用；
+`import.t-plus-one`保存T+1自己的Cron、读取批次、队列、Bulk、重试、失败阈值和索引优化参数；`notify`独立保存服务级通知开关和Lark渠道，供导入及后续其他模块复用；
 polling在`polling`配置段维护自己的轮询间隔、读取批次、Worker、队列、Bulk和重试参数。后续MQ同样新增独立配置段，不能继承T+1参数。
+
+版本A当前代码只有`EsImportProperties`中的`common`、`t-plus-one`和`tables`配置模型，所有线上表均显式为`sync-mode: t-plus-one`；尚未创建`polling`配置类或轮询协调器。Compose中的`SANO_ES_POLLING_ENABLED=false`是部署边界声明，不能据此认为版本A已经具备polling能力。
 
 运行规则：
 
@@ -281,22 +283,23 @@ polling在`polling`配置段维护自己的轮询间隔、读取批次、Worker�
 
 ```yaml
 sano:
-  es:
-    import:
-      common:
-        write:
-          global-bulk-concurrency: 3
-          polling-reserved-concurrency: 2
-          t-plus-one-max-concurrency: 3
-          global-queue-max-bytes: 128mb
-    polling:
-      enabled: true
-      max-active-tables: 5
-        reader-per-table: 1
-        bulk-workers-per-table: 2
-        queue-capacity-batches-per-table: 4
-        max-uncommitted-sequences-per-table: 8
+  import:
+    common:
+      write:
+        global-bulk-concurrency: 3
+        polling-reserved-concurrency: 2
+        t-plus-one-max-concurrency: 3
+        global-queue-max-bytes: 128MB
+  polling:
+    enabled: true
+    max-active-tables: 5
+    reader-per-table: 1
+    bulk-workers-per-table: 2
+    queue-capacity-batches-per-table: 4
+    max-uncommitted-sequences-per-table: 8
 ```
+
+其中`sano.import.common.write`已在版本A实现并由T+1使用；`sano.polling`及其余参数属于版本B待实现配置。
 
 说明：
 
@@ -518,14 +521,17 @@ ES Bulk 的 HTTP 请求成功不代表每个文档都写成功。必须遍历每
 
 ## 7. 同步 checkpoint 与错误持久化
 
-不建议只保存在 JVM 内存或日志文件。可在 Elasticsearch 新建两个内部索引：
+不建议只保存在JVM内存或日志文件。版本B的内部持久化索引统一使用`sano_sync_`前缀，便于通过`sano_sync_*`集中查看：
 
 ```text
-sano_polling_sync_checkpoint
+sano_sync_polling_checkpoint
 sano_sync_error
+sano_sync_reconcile_task
 ```
 
-### 7.1 `sano_polling_sync_checkpoint` 建议字段
+其中`sano_sync_polling_checkpoint`是Polling专属索引，因此名称保留`polling`；error和reconcile task由T+1与Polling共用，不增加单一引擎名称。checkpoint和error字段在本章定义，reconcile task在第8章定义；三者职责独立，不合并到同一个Mapping。
+
+### 7.1 `sano_sync_polling_checkpoint` 建议字段
 
 | 字段 | 含义 |
 | --- | --- |
@@ -688,10 +694,9 @@ Reader 生成关闭标记只需满足：
 
 ```yaml
 sano:
-  es:
-    polling:
-      reconcile:
-        allowed-difference-rate: 0.001
+  polling:
+    reconcile:
+      allowed-difference-rate: 0.001
 ```
 
 阈值只决定一致性状态、告警级别和补偿优先级，不参与日期 checkpoint 推进。快速统计阶段可先使用 `abs(mysql_count - es_count) / max(mysql_count, 1)` 判断差异规模；进入精确 ID 核对后，以 `missing_mysql_id_count / max(mysql_count, 1)` 作为最终缺失率。
@@ -911,12 +916,12 @@ Lark 通知至少包含：
 ```yaml
 sano:
   server-mode: all # all / query
-  es:
-    import:
-      t-plus-one:
-        enabled: true
-    polling:
+  import:
+    t-plus-one:
       enabled: true
+  # 版本B待实现；版本A没有该配置模型。
+  polling:
+    enabled: true
 ```
 
 运行模式的优先级高于各功能开关：
@@ -932,17 +937,17 @@ sano:
 
 | 容器 | 模式 | 宿主机端口 | 生命周期 |
 | --- | --- | --- | --- |
-| `sano-es-server` | `all` | `127.0.0.1:8002` | 常驻，提供查询和同步 |
-| `sano-es-server-query` | `query` | `127.0.0.1:8003` | 更新前启动，主实例恢复后停止 |
+| `sano-es-server` | `all` | `0.0.0.0:8002` | 常驻，提供查询和同步 |
+| `sano-es-server-query` | `query` | `0.0.0.0:8003` | 更新前启动，主实例恢复后停止 |
 
 临时查询容器优先使用当前线上稳定镜像标签启动。这样即使新版本启动失败，查询仍由已验证版本继续提供。该稳定镜像必须已经实现 `server-mode=query`；首次从旧版升级时不能假设旧镜像具备此能力，必须先完成 12.4.1 的基础能力发布。
 
 ### 12.3 Nginx 配置思路
 
-内网 `172.31.38.87:8080` 与外部 `es-server.fofunlive.net` 共用查询 upstream：
+正式环境内部入口`服务器内网IP:8102`与外部`es-server.fofunlive.net:80`共用查询upstream：
 
 ```nginx
-upstream es_query_backend {
+upstream es_server_query_backend {
     server 127.0.0.1:8002 max_fails=1 fail_timeout=5s;
     server 127.0.0.1:8003 backup max_fails=1 fail_timeout=5s;
 }
@@ -984,11 +989,11 @@ server {
 部署脚本对`9003/9004`回环端口的访问仅用于精确识别主实例和临时实例的`health/ready/drain`；接管和最终查询冒烟
 同时请求外部域名和`127.0.0.1:9103`。其中回环地址用于本机部署检查，其他内部业务仍通过`服务器内网IP:9103`调用。
 
-`8003` 设置为 `backup`：正常时请求只进入主实例；主实例更新不可用时，Nginx 将查询切到临时 query-only 实例。查询 Controller 虽然部分使用 POST，但语义是只读，可在明确的查询路径中允许故障重试：
+`8003` 设置为 `backup`：正常时请求只进入主实例；主实例更新不可用时，Nginx 将查询切到临时 query-only 实例。版本A当前Nginx配置对整个服务使用统一的`location /`，正式配置以`es-server/nginx/es-server.conf.example`为准：
 
 ```nginx
-location ~ ^/(walletCoin|walletDiamond)(/|$) {
-    proxy_pass http://es_query_backend;
+location / {
+    proxy_pass http://es_server_query_backend;
     proxy_http_version 1.1;
     proxy_set_header Connection "";
     proxy_set_header Host $host;
@@ -996,17 +1001,15 @@ location ~ ^/(walletCoin|walletDiamond)(/|$) {
     proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
     proxy_set_header X-Forwarded-Proto $scheme;
 
-    proxy_connect_timeout 10s;
+    proxy_connect_timeout 60s;
     proxy_read_timeout 300s;
     proxy_send_timeout 300s;
-    proxy_next_upstream error timeout http_502 http_503 http_504 non_idempotent;
+    proxy_next_upstream error timeout http_502 http_503 http_504;
     proxy_next_upstream_tries 2;
 }
 ```
 
-`non_idempotent` 只能放在确认没有写操作的查询路径，不能应用到导入、补数、暂停、恢复或 drain 接口。其他查询 Controller 上线时同步补充到 location 白名单。
-
-同步管理接口不通过公共域名负载均衡。部署脚本直接调用主实例 `http://127.0.0.1:8002/internal/sync/...`，避免请求落到 query-only 容器。Nginx 对外应拒绝 `/internal/**`，或仅允许本机/指定内网运维地址访问。
+部署脚本不通过Nginx调用同步管理接口，而是直接请求主实例`http://127.0.0.1:8002/internal/sync/...`，避免请求落到query-only容器。当前Nginx配置没有为`/internal/**`增加`allow/deny`或单独location，管理接口仍由程序内置Token校验；业务和部署脚本不得把Nginx负载入口当作主实例管理地址。
 
 ### 12.4 更新脚本流程
 
@@ -1015,14 +1018,14 @@ location ~ ^/(walletCoin|walletDiamond)(/|$) {
 ```text
 1. 获取当前线上镜像标签，启动 sano-es-server-query（query 模式）
 2. 等待 query 容器 /health、/ready 和真实 ES 查询冒烟通过
-3. 检查 Nginx 配置并 reload；确认 8003 可承接查询
+3. 确认Nginx已预配置8003 backup；仅在显式提供检查和reload命令时由脚本重新加载
 4. POST 主实例 /internal/sync/drain
 5. 轮询 drain/status，直到 DRAINED 或 DRAINED_WITH_ERRORS
 6. 若超时或 FAILED：调用 drain/cancel，立即中止更新，不停止主实例
 7. 停止并替换 sano-es-server 主实例
 8. 等待新版 /health、/ready、查询冒烟通过
-9. 确认新版获取同步租约：正常表进入 RUNNING，原失败表保持 PAUSED
-10. 确认新数据 checkpoint 正常推进
+9. 版本A确认同步协调器恢复为`RUNNING`；版本B再检查租约和各表运行状态
+10. 版本B启用polling后再确认新数据checkpoint正常推进；版本A不执行该检查
 11. 停止临时 query 容器，最终检查主实例查询
 ```
 
@@ -1040,14 +1043,14 @@ location ~ ^/(walletCoin|walletDiamond)(/|$) {
 
 #### 12.4.1 首次升级采用两阶段发布
 
-当前线上旧镜像尚不支持 `server-mode=query`、统一 `/internal/sync/drain`，部署脚本也会先停止并删除旧容器，因此不能第一次就按上述流程宣称无中断。首次升级必须拆成两个版本：
+版本A上线前的旧镜像不支持`server-mode=query`和统一`/internal/sync/drain`，因此首次升级不能按上述流程宣称无中断。该历史升级已经完成，后续发布不得再次使用legacy绕过版本A预检：
 
-**基础能力版本 A（polling 保持关闭）**
+**基础能力版本 A（已上线，polling保持关闭）**
 
-1. 实现并验证`server-mode=all/query`、统一drain/status/cancel、T+1连续批次安全断点、T+1`TIMEOUT_PARTIAL`立即恢复、共享写入许可证与内存预算。
-2. 所有表的 `sync-mode` 缺省或显式保持 `t-plus-one`，`polling.enabled=false`，确保业务同步行为仍与旧版一致。
-3. 第一次部署 A 仍按旧系统能支持的维护流程执行；若现有环境无法保留查询容器，应接受这一次受控维护窗口，不能伪装为零中断。
-4. 上线后实际演练 query-only 接管、统一 drain、cancel、旧镜像回滚和 T+1 断点恢复，确认脚本不会删除仍被容器引用的镜像。
+1. 已实现并验证`server-mode=all/query`、统一drain/status/cancel、T+1连续批次安全断点、T+1`TIMEOUT_PARTIAL`立即恢复、共享写入许可证与内存预算。
+2. 所有线上表均显式保持`sync-mode: t-plus-one`；Compose保留`SANO_ES_POLLING_ENABLED=false`边界声明，代码中尚无polling引擎。
+3. 第一次部署A已通过legacy完成受控升级；该模式只保留给无旧容器的首次安装或历史旧版本升级场景。
+4. 已完成query-only接管、统一drain、cancel、旧镜像回滚和T+1断点恢复的测试与发布验收。
 
 **业务能力版本 B（按表启用 polling）**
 
@@ -1061,10 +1064,12 @@ location ~ ^/(walletCoin|walletDiamond)(/|$) {
 
 `/health` 只表示 JVM 存活；更新脚本应使用更严格的 `/ready`：
 
-- `query` 模式：Spring 启动完成、ES 可访问、一次轻量查询成功。
-- `all`模式：查询ready；存在polling表时要求checkpoint索引可访问且租约协调器已启动，存在T+1表时要求任务索引可访问。T+1调度器Bean由应用启动成功本身保证，不在ready接口中重复做可空检查。表暂未取得租约或总开关关闭时必须显示真实等待/停用原因。
+- `query`模式：ES可访问，并对一张已启用表的真实业务Alias执行`size=0`轻量查询；没有启用表时只检查ES连接。
+- 版本A的`all`模式：在查询ready之外，存在已启用T+1表且T+1总开关开启时要求`sano_import_task`索引可访问；总开关关闭时返回`T_PLUS_ONE_DISABLED_BY_GLOBAL_SWITCH`但不伪装成运行中。
+- 版本A若误配置任何polling表，`/ready`必须返回503并包含`POLLING_ENGINE_NOT_IMPLEMENTED`，阻止错误配置被发布。
+- 版本B实现后，再扩展`/ready`检查checkpoint索引、租约协调器和polling总开关状态。
 
-同步表暂时 `PAUSED` 或 T+1 任务失败不应使整个查询服务 unhealthy，但 `/internal/sync/status` 和 Lark 必须明确暴露异常表。
+同步表暂时`PAUSED`或T+1任务失败不应使整个查询服务unhealthy。版本A通过`/internal/sync/drain/status`展示协调器、T+1运行态、持久任务快照和drain结果；版本B再新增表级状态接口，并由Lark明确通知异常表。
 
 ## 13. 推荐代码边界
 
@@ -1074,14 +1079,21 @@ location ~ ^/(walletCoin|walletDiamond)(/|$) {
 com.tsd.sano.es
 ├── sync                     # importer/polling 共用的模式和资源协调
 │   ├── config
-│   │   └── TableSyncMode.java
+│   │   ├── TableSyncMode.java
+│   │   ├── EsServiceMode.java
+│   │   └── EsServiceModeManager.java
 │   ├── service
 │   │   ├── GlobalEsWritePermitManager.java
 │   │   ├── GlobalSyncMemoryLimiter.java
-│   │   └── ReconcileTaskRepository.java
-│   └── controller
-│       └── SyncManagementController.java
-├── importer                 # 现有 T+1 / 历史补数，保持独立
+│   │   ├── SyncDrainCoordinator.java
+│   │   └── ReconcileTaskRepository.java  # 版本B待实现
+├── controller
+│   ├── ReadyController.java
+│   └── SyncDrainController.java
+├── importer                 # 现有T+1/历史补数及当前Lark导入通知
+│   └── notify
+│       ├── ImportNotifyService.java
+│       └── LarkImportNotifier.java
 ├── polling                  # 新增低延迟轮询同步
 │   ├── config
 │   │   └── EsPollingProperties.java  # 仅保存轮询引擎全局参数
@@ -1098,9 +1110,10 @@ com.tsd.sano.es
 │   │   ├── TableStateWriter.java
 │   │   ├── SyncCheckpointService.java
 │   │   └── DailyReconciliationService.java
-├── search                   # 查询逻辑
-└── notify                   # importer/polling 共用通知抽象
+└── search                   # 查询逻辑
 ```
+
+其中`polling`目录和`ReconcileTaskRepository`在版本A中尚不存在；其余列出的模式、资源、drain、ready及Lark通知类均以当前源码为准。版本B可以复用通知接口，但不应为了目录对称提前搬移已经稳定运行的T+1通知实现。
 
 实现时避免将无限循环、SQL、ES Bulk、checkpoint、Lark 通知全部堆在一个类。边界建议：
 
@@ -1119,15 +1132,15 @@ com.tsd.sano.es
 
 ### 14.1 实施顺序
 
-1. 先修复现有 T+1 的连续批次安全断点，接入共享写入许可证/内存预算，并实现统一异步对账任务；用 `SUCCESS`、`TIMEOUT_PARTIAL`、单条失败和强停恢复验证不跳 ID。
-2. 实现 `server-mode`、统一 drain/status/cancel 和部署脚本回滚陷阱，发布基础能力版本 A；此时所有表保持 T+1，polling 关闭。
-3. 在 `sano.import.tables` 的 `TableConfig` 中增加 `sync-mode` 和 `bootstrap-start-date`，默认模式为 `t-plus-one`；让现有 T+1 调度器按模式筛选并验证旧配置行为不变。
-4. 新建 checkpoint/error 索引、串行 `TableStateWriter` 与轮询配置模型，实现 polling 单表启动、租约、暂停和恢复。
-5. 实现单表按 `sync_date + id` 逐日轮询、每表独立队列/Bulk Workers、有界 sequence 窗口，并正确处理读取日期领先持久 checkpoint。
-6. 实现可重试/不可重试错误分类：单条错误可靠进入错误池后继续，系统性故障熔断暂停；补齐 Lark 通知。
-7. 实现带 owner/lease/OCC 的异步快速统计对账、条件更新表级一致性状态、定向 ID 差异检查和补偿。
-8. 在测试环境同时启用至少一张 `polling` 表和一张 `t-plus-one` 表连续运行数天，确认调度、资源、Alias、对账和 drain 完全隔离，再发布版本 B 并逐表启用 polling。
-9. 生产环境可保留现有 T+1 导入作为人工紧急回填工具；使用前先暂停对应表轮询并排空在途请求，完成回填后再从可信 checkpoint 恢复，不能并行写同一张表。
+1. [x] 修复现有T+1的连续批次安全断点并接入共享写入许可证/内存预算；用`SUCCESS`、`TIMEOUT_PARTIAL`、单条失败和强停恢复验证不跳ID。统一异步对账仍属于版本B，不计入本项已完成范围。
+2. [x] 实现`server-mode`、统一drain/status/cancel和部署脚本回滚陷阱，发布基础能力版本A；所有线上表保持T+1，polling关闭。
+3. [x] 在`sano.import.tables`的`TableConfig`中增加`sync-mode`和`bootstrap-start-date`，默认模式为`t-plus-one`；配置加载时直接校验并生成T+1、polling两个只读分类集合。
+4. [ ] 新建checkpoint/error索引、串行`TableStateWriter`与轮询配置模型，实现polling单表启动、租约、暂停和恢复。
+5. [ ] 实现单表按`sync_date + id`逐日轮询、每表独立队列/Bulk Workers、有界sequence窗口，并正确处理读取日期领先持久checkpoint。
+6. [ ] 实现可重试/不可重试错误分类：单条错误可靠进入错误池后继续，系统性故障熔断暂停；补齐Lark通知。
+7. [ ] 实现带owner/lease/OCC的异步快速统计对账、条件更新表级一致性状态、定向ID差异检查和补偿。
+8. [ ] 在测试环境同时启用至少一张`polling`表和一张`t-plus-one`表连续运行数天，确认调度、资源、Alias、对账和drain完全隔离，再发布版本B并逐表启用polling。
+9. [ ] 生产环境可保留现有T+1导入作为人工紧急回填工具；使用前先暂停对应表轮询并排空在途请求，完成回填后再从可信checkpoint恢复，不能并行写同一张表。
 
 ### 14.2 验收场景
 
@@ -1145,7 +1158,7 @@ com.tsd.sano.es
 12. 租约与 checkpoint 并发：持续续租同时高频完成 Bulk，不出现正常竞争导致的409风暴；旧 lease token 的迟到回调不能修改新实例状态。
 13. T+1 部分失败：低 ID 失败、高 ID 成功后触发 drain/强停，`TIMEOUT_PARTIAL` 只能保存连续安全 ID，恢复后低 ID 不被跳过。
 14. 对账抢占与乱序：旧实例对账结果晚到或旧日期补跑完成，不能覆盖新 owner 或较新日期的 `consistency_status`。
-15. 首次升级：先发布 polling 关闭的基础版本 A 并演练 query-only/drain/cancel/回滚，再以无中断流程发布 B；旧镜像不具备 query-only 时不会误走新版流程。
+15. 升级路径：polling关闭的基础版本A及query-only/drain/cancel/回滚演练已经完成；版本B必须以线上A为稳定镜像按safe流程升级。
 
 ## 15. 最终建议
 
@@ -1165,7 +1178,7 @@ com.tsd.sano.es
     + 每个历史日期关闭时先持久化异步对账任务再推进日期，对账差异按默认千分之一容差分级并异步补偿，不阻塞新日期同步
     + T+1与polling共用带租约/OCC的异步对账任务，并防止旧日期结果覆盖新状态
     + 硬停机依靠持久化 checkpoint 和 ES _id 幂等恢复
-    + 首次先发布polling关闭的基础能力版本A；之后更新前启动query-only，统一drain两套引擎后替换主实例
+    + polling关闭的基础能力版本A已上线；后续更新前启动query-only，版本B统一drain两套引擎后替换主实例
 ```
 
 不建议第一版把全局 Bulk 许可证设置过大、静默丢弃永久错误、每天全量重导或使用复杂的动态速率算法。单条坏数据可以在错误池可靠留痕后继续，但不能无审计跳过。先确保“按天不跳游标、表间隔离、状态串行持久化、可暂停、可恢复、目标索引明确、能发现并补齐缺失数据”，再根据 ES 监控逐步提高全局并发。

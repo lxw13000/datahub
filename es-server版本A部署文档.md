@@ -2,15 +2,15 @@
 
 ## 1. 文档说明
 
-本文档用于部署和运维 `es-server` 版本A，重点说明测试环境从旧版本首次升级、后续无感安全升级、Nginx 查询接管、严格就绪检查和自动回滚。
+本文档用于部署和运维已上线的`es-server`版本A，覆盖正式与测试环境的safe升级、Nginx查询接管、严格就绪检查和自动回滚；首次legacy升级仅作为历史或全新环境参考。
 
 本文档是新增文档，不替代原有的 `部署文档.md`。原文档中的 Elasticsearch 安装、宿主机系统参数和基础 Docker 运维内容继续有效；部署流程与本文档冲突时，版本A的 `es-server` 发布以本文档和当前源码为准。
 
 当前验证基线：
 
-- 文档日期：2026-07-19。
+- 文档日期：2026-07-22。
 - 测试环境 Nginx 配置 `es-server/nginx/es-server-test.conf.example` 已在服务器连续运行两天。
-- 测试环境常驻容器使用 `all` 模式。
+- 版本A已完成正式环境发布验收；正式与测试常驻容器均使用`all`模式。
 - `query` 容器只在 `safe` 部署期间临时启动。
 - T+1 同步可用。
 - 延迟轮询引擎仍未实现，版本A必须保持关闭。
@@ -21,7 +21,7 @@
 
 - 同一镜像支持 `all`、`query` 两种运行角色。
 - `all` 实例同时承担查询和 T+1 同步。
-- `query` 实例开放查询，但关闭 T+1、Polling 及同步调度能力。
+- `query`实例开放查询并注册与`all`相同的Bean和基础执行器，但运行时门禁禁止提交T+1、Polling及其他同步工作。
 - `/health` 存活检查和 `/ready` 严格就绪检查。
 - 统一 drain、cancel 和 drain/status 协议。
 - 部署前排空 Reader、队列、Bulk 和活动任务。
@@ -29,7 +29,7 @@
 - 新版本失败后自动恢复原版本。
 - Compose 客户端卡住时的独立超时保护。
 
-版本A不包含 Polling 延迟同步引擎、Polling checkpoint 和 Polling 租约。因此必须满足：
+版本A不包含Polling延迟同步引擎、Polling checkpoint和Polling租约。所有表保持T+1是实际生效边界；Compose同时显式保留以下防误配声明：
 
 ```text
 SANO_ES_POLLING_ENABLED=false
@@ -196,7 +196,7 @@ docker compose -f docker-compose-test.yml config --quiet \
 - 常驻实例 `SPRING_PROFILES_ACTIVE=test`、`SANO_SERVER_MODE=all`。
 - 临时实例 `SANO_SERVER_MODE=query`。
 - 常驻实例 T+1 开启，临时实例 T+1 关闭。
-- 两种实例 Polling 均关闭。
+- 两种实例均声明`SANO_ES_POLLING_ENABLED=false`；版本A代码本身没有polling配置模型和执行引擎。
 - 所有版本A表仍是 `sync-mode: t-plus-one`。
 - MySQL、ES 用户名和密码按服务器实际环境注入。
 
@@ -234,7 +234,7 @@ ES_SERVER_IMAGE_TAG=v1.0.9
 
 旧版本没有 `/ready`、drain 和 query 模式时只能使用 `legacy`。当前实例已经是 v1.0.8 或更高版本A后，必须使用 `safe`，不能为了绕过前置检查重新使用 `legacy`。
 
-## 9. 首次升级到版本A
+## 9. 首次升级到版本A（历史或全新环境）
 
 仅用于旧版本首次升级到版本A，例如 v1.0.7 升级到 v1.0.8。旧版本不具备 query 接管和统一 drain，本次存在受控查询维护窗口。
 
@@ -346,7 +346,7 @@ test-rollback-v1.0.8-20260719120000
 | `ES_SERVER_IMAGE_TAG` | `latest` | 目标标签，发布时必须显式指定版本 |
 | `DEPLOY_MODE` | `safe` | `safe` 或 `legacy` |
 | `NGINX_HANDOFF_PRECONFIGURED` | `false` | safe 模式下确认 Nginx 主备配置已生效 |
-| `SYNC_API_TOKEN` | 脚本默认值 | 内部接口 Token，建议通过环境变量管理 |
+| `SYNC_API_TOKEN` | 脚本内置固定值 | 正常部署无需传入；仅在统一轮换程序固定Token时临时覆盖 |
 | `COMPOSE_UP_TIMEOUT` | `30` | Compose detached 启动命令超时秒数 |
 | `START_TIMEOUT` | `180` | 单个容器严格就绪超时秒数 |
 | `DRAIN_TIMEOUT` | `600` | drain 最长等待秒数 |
@@ -614,16 +614,16 @@ safe 模式拒绝替换停止状态的旧容器，因为无法完成能力预检
 
 ### 17.2 发布命令
 
-首次版本A升级：
-
-```bash
-ES_SERVER_IMAGE_TAG=v1.0.8 DEPLOY_MODE=legacy ./deploy-es-server-test.sh
-```
-
-后续正常升级：
+当前正式、测试环境均已具备版本A能力，正常发布只使用safe命令：
 
 ```bash
 ES_SERVER_IMAGE_TAG=目标版本 DEPLOY_MODE=safe NGINX_HANDOFF_PRECONFIGURED=true ./deploy-es-server-test.sh
+```
+
+仅无旧容器或仍停留在历史旧版本的环境首次升级版本A时使用：
+
+```bash
+ES_SERVER_IMAGE_TAG=v1.0.8 DEPLOY_MODE=legacy ./deploy-es-server-test.sh
 ```
 
 ### 17.3 发布后
@@ -698,9 +698,9 @@ curl -fsS http://es.fofunlive.net
 
 内部正式业务优先使用 `服务器内网IP:8102`；Docker 后端端口8002和8003虽然已监听全部网络接口，但业务不应直接依赖部署期间会启停的临时 query 端口8003。
 
-### 18.2 正式环境首次版本A升级
+### 18.2 正式环境首次版本A升级（已完成）
 
-旧版本首次升级到版本A时使用一次 legacy：
+正式环境从旧版本首次升级到版本A时已使用一次legacy完成受控发布。以下命令只用于无旧容器的首次安装或仍停留在历史旧版本的环境，不得用于当前正式实例的后续升级：
 
 ```bash
 cd /home/ec2-user/datahub/es-server
@@ -711,7 +711,7 @@ DEPLOY_MODE=legacy \
 
 ### 18.3 正式环境后续安全升级
 
-当前正式实例已经具备版本A能力后，后续发布使用：
+当前正式实例已经具备版本A能力，后续发布必须使用：
 
 ```bash
 cd /home/ec2-user/datahub/es-server
