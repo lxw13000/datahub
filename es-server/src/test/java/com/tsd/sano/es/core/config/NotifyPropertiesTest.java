@@ -18,7 +18,7 @@ class NotifyPropertiesTest {
      * sano.notify只绑定总开关和消息通道能力。
      */
     @Test
-    void shouldBindNotifySwitchAndChannels() {
+    void shouldBindNotifySwitchAndLarkChannel() {
         Map<String, String> values = Map.of(
                 "sano.notify.enabled", "true",
                 "sano.notify.lark.enabled", "true",
@@ -34,6 +34,5 @@ class NotifyPropertiesTest {
         assertThat(properties.getLark().isEnabled()).isTrue();
         assertThat(properties.getLark().getWebhookUrl())
                 .isEqualTo("https://example.test/hook");
-        assertThat(properties.getDingtalk().isEnabled()).isFalse();
     }
 }

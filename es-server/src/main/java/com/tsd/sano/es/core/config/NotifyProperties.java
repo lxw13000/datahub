@@ -23,9 +23,6 @@ public class NotifyProperties {
     /** 飞书/Lark机器人配置。 */
     private Channel lark = new Channel();
 
-    /** 钉钉机器人配置。 */
-    private Channel dingtalk = new Channel();
-
     /**
      * 单个webhook通知渠道配置。
      */

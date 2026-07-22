@@ -70,15 +70,6 @@ sano:
       webhook-url: ${LARK_WEBHOOK_URL:https://open.larksuite.com/open-apis/bot/v2/hook/b99cf729-136e-40e6-90b7-0ec5e8c61ebb}
       # 机器人签名密钥；未启用签名时留空。
       secret: ${LARK_WEBHOOK_SECRET:WJ83ViVAM6RbDUjuxhvtah}
-    # 钉钉机器人配置；关闭或webhook地址为空时跳过该通道。
-    dingtalk:
-      # 钉钉机器人开关。
-      enabled: ${DINGTALK_NOTIFY_ENABLED:false}
-      # 钉钉机器人webhook地址。
-      webhook-url: ${DINGTALK_WEBHOOK_URL:}
-      # 机器人签名密钥；未启用签名时留空。
-      secret: ${DINGTALK_WEBHOOK_SECRET:}
-
   import:
     # T+1、polling及未来MQ共用的写入资源和安全排空参数。
     common:
