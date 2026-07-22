@@ -19,4 +19,16 @@ public interface EsIndexAlias {
     String SANO_WALLET_DIAMOND_RECORD = "sano_wallet_diamond_record";
 
 
+    /**
+     * 钻石记录10分钟记录明细
+     */
+    String SANO_WALLET_LUCKY_DIAMOND_RECORD_10M = "sano_wallet_lucky_diamond_record_10m";
+
+
+    /**
+     * 游戏记录
+     */
+    String SANO_GAME_RECORD = "sano_game_record";
+
+
 }
