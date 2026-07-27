@@ -3,8 +3,6 @@ package com.tsd.sano.es.polling.service;
 import com.tsd.sano.es.core.exception.ServiceException;
 import com.tsd.sano.es.importer.pipeline.config.EsImportProperties;
 import org.apache.commons.lang3.StringUtils;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
 import org.springframework.dao.DataAccessException;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Service;
@@ -23,8 +21,6 @@ import java.util.Map;
  */
 @Service
 public class PollingJdbcReader {
-
-    private static final Logger log = LoggerFactory.getLogger(PollingJdbcReader.class);
 
     private final JdbcTemplate jdbcTemplate;
 
@@ -79,9 +75,7 @@ public class PollingJdbcReader {
                 + " LIMIT ?";
 
         try {
-            long startTime = System.currentTimeMillis();
             List<Map<String, Object>> rows = jdbcTemplate.queryForList(sql, params.toArray());
-            long costMs = System.currentTimeMillis() - startTime;
             long firstId = 0L;
             long nextLastId = lastId;
 
@@ -100,9 +94,6 @@ public class PollingJdbcReader {
                 nextLastId = number3.longValue();
             }
 
-            log.info("===> ES-Polling mysql batch read. table={}, date={}, size={}, lastId={}, nextLastId={}, "
-                            + "batchSize={}, costMs={}",
-                    tableName, syncDate, rows.size(), lastId, nextLastId, batchSize, costMs);
             return new ReadBatch(rows, firstId, nextLastId);
         } catch (DataAccessException error) {
             throw new ServiceException("ES polling mysql query failed, tableName=" + tableName

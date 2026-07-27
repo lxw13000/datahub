@@ -94,6 +94,41 @@
         </encoder>
     </appender>
 
+    <!-- ===================== Polling同步专项日志 ===================== -->
+    <appender name="POLLING_FILE" class="ch.qos.logback.core.rolling.RollingFileAppender">
+        <file>${LOG_DAY_DIR}/${APP_NAME}-polling.log</file>
+        <rollingPolicy class="ch.qos.logback.core.rolling.SizeAndTimeBasedRollingPolicy">
+            <fileNamePattern>${LOG_DIR}/%d{yyyyMMdd}/${APP_NAME}-polling.%i.log.gz</fileNamePattern>
+            <maxFileSize>${MAX_FILE_SIZE}</maxFileSize>
+            <maxHistory>${MAX_HISTORY}</maxHistory>
+            <totalSizeCap>${TOTAL_SIZE_CAP}</totalSizeCap>
+        </rollingPolicy>
+        <encoder>
+            <pattern>${FILE_PATTERN}</pattern>
+            <charset>UTF-8</charset>
+        </encoder>
+    </appender>
+
+    <!-- Polling ERROR独立保存；同一错误仍保留在应用Polling日志中，便于按完整调用链排查。 -->
+    <appender name="POLLING_ERROR_FILE" class="ch.qos.logback.core.rolling.RollingFileAppender">
+        <file>${LOG_DAY_DIR}/${APP_NAME}-polling-error.log</file>
+        <filter class="ch.qos.logback.classic.filter.LevelFilter">
+            <level>ERROR</level>
+            <onMatch>ACCEPT</onMatch>
+            <onMismatch>DENY</onMismatch>
+        </filter>
+        <rollingPolicy class="ch.qos.logback.core.rolling.SizeAndTimeBasedRollingPolicy">
+            <fileNamePattern>${LOG_DIR}/%d{yyyyMMdd}/${APP_NAME}-polling-error.%i.log.gz</fileNamePattern>
+            <maxFileSize>${MAX_FILE_SIZE}</maxFileSize>
+            <maxHistory>${MAX_HISTORY}</maxHistory>
+            <totalSizeCap>${TOTAL_SIZE_CAP}</totalSizeCap>
+        </rollingPolicy>
+        <encoder>
+            <pattern>${FILE_PATTERN}</pattern>
+            <charset>UTF-8</charset>
+        </encoder>
+    </appender>
+
     <!-- ===================== 查询API专项日志 ===================== -->
     <appender name="SEARCH_API_FILE" class="ch.qos.logback.core.rolling.RollingFileAppender">
         <file>${LOG_DAY_DIR}/${APP_NAME}-search-api.log</file>
@@ -138,6 +173,20 @@
         <includeCallerData>false</includeCallerData>
     </appender>
 
+    <appender name="ASYNC_POLLING_FILE" class="ch.qos.logback.classic.AsyncAppender">
+        <appender-ref ref="POLLING_FILE"/>
+        <queueSize>${ASYNC_QUEUE_SIZE}</queueSize>
+        <discardingThreshold>0</discardingThreshold>
+        <includeCallerData>false</includeCallerData>
+    </appender>
+
+    <appender name="ASYNC_POLLING_ERROR_FILE" class="ch.qos.logback.classic.AsyncAppender">
+        <appender-ref ref="POLLING_ERROR_FILE"/>
+        <queueSize>${ASYNC_QUEUE_SIZE}</queueSize>
+        <discardingThreshold>0</discardingThreshold>
+        <includeCallerData>false</includeCallerData>
+    </appender>
+
     <appender name="ASYNC_SEARCH_API_FILE" class="ch.qos.logback.classic.AsyncAppender">
         <appender-ref ref="SEARCH_API_FILE"/>
         <queueSize>${ASYNC_QUEUE_SIZE}</queueSize>
@@ -169,6 +218,12 @@
         <!-- 导入失败ID独立落文件，避免混入普通导入进度日志。 -->
         <logger name="com.tsd.sano.es.importer.error" level="ERROR" additivity="false">
             <appender-ref ref="ASYNC_IMPORT_ERROR_FILE"/>
+        </logger>
+
+        <!-- Polling同步日志独立落文件，同时继续向root传递到开发控制台和应用总日志。 -->
+        <logger name="com.tsd.sano.es.polling" level="DEBUG" additivity="true">
+            <appender-ref ref="ASYNC_POLLING_FILE"/>
+            <appender-ref ref="ASYNC_POLLING_ERROR_FILE"/>
         </logger>
 
         <!-- 查询API日志单独落文件，同时继续向 root 传递，便于开发控制台观察。 -->
@@ -211,6 +266,12 @@
         <!-- 导入失败ID独立落文件，便于按表名和ID回查数据源。 -->
         <logger name="com.tsd.sano.es.importer.error" level="ERROR" additivity="false">
             <appender-ref ref="ASYNC_IMPORT_ERROR_FILE"/>
+        </logger>
+
+        <!-- 生产Polling日志独立保存；ERROR同时写入应用Polling错误日志。 -->
+        <logger name="com.tsd.sano.es.polling" level="INFO" additivity="true">
+            <appender-ref ref="ASYNC_POLLING_FILE"/>
+            <appender-ref ref="ASYNC_POLLING_ERROR_FILE"/>
         </logger>
 
         <!-- 查询API日志单独落文件，同时继续向 root 传递，便于统一排查。 -->

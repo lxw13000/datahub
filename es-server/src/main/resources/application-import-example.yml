@@ -38,7 +38,7 @@ sano:
         polling-reserved-concurrency: 2
         # polling空闲时T+1最多可使用的Bulk并发数。
         t-plus-one-max-concurrency: 3
-        # 所有同步引擎排队、在途和重试批次的合计内存预算。
+        # T+1排队、在途和重试批次的合计内存预算。
         global-queue-max-bytes: 128MB
 
     # T+1独有参数；polling和未来MQ分别维护自己的读取、队列、Bulk及重试配置。

@@ -11,10 +11,10 @@ import java.util.concurrent.locks.ReentrantLock;
 import java.util.function.BooleanSupplier;
 
 /**
- * T+1与polling共用的批次内存预算控制器。
+ * T+1流水线的批次内存预算控制器。
  *
  * <p>一个Reservation从读取前预留开始，经过排队和Bulk执行，直到批次终态后关闭。
- * 预算不足时Reader等待，从源头限制两套引擎合计内存，而不是只限制队列元素数量。</p>
+ * 预算不足时Reader等待，从源头限制T+1队列和在途批次合计内存，而不是只限制队列元素数量。</p>
  */
 @Component
 public class GlobalSyncMemoryLimiter {
@@ -30,7 +30,7 @@ public class GlobalSyncMemoryLimiter {
     /** 批次释放或缩小预留后唤醒等待Reader。 */
     private final Condition memoryAvailable = lock.newCondition();
 
-    /** 所有同步引擎共享的内存预算上限。 */
+    /** T+1排队和在途批次共享的内存预算上限。 */
     private final long maxBytes;
 
     /** 当前全部有效Reservation占用的估算字节数。 */

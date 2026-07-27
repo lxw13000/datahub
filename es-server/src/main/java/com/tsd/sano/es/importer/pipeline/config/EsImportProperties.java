@@ -175,7 +175,7 @@ public class EsImportProperties {
         private int drainTimeoutSeconds = 600;
 
         /**
-         * 所有同步引擎共用的ES写入并发和内存预算。
+         * 所有同步引擎共用的ES写入并发，以及T+1流水线内存预算。
          */
         private Write write = new Write();
     }
@@ -338,7 +338,7 @@ public class EsImportProperties {
         private int tPlusOneMaxConcurrency = 3;
 
         /**
-         * 所有同步引擎排队、在途和重试批次的合计内存预算。
+         * T+1排队、在途和重试批次的合计内存预算。
          */
         private DataSize globalQueueMaxBytes = DataSize.ofMegabytes(128);
     }

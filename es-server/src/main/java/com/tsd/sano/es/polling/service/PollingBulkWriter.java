@@ -69,13 +69,15 @@ public class PollingBulkWriter {
      * @param syncDate    当前业务日期
      * @param indexName   当前日期物理索引
      * @param readBatch   本次MySQL查询结果
+     * @return true表示整批写入成功，false表示重试耗尽并按业务规则继续
      */
-    public void writeBatch(EsImportProperties.TableConfig tableConfig, LocalDate syncDate,
-                           String indexName, PollingJdbcReader.ReadBatch readBatch) {
+    public boolean writeBatch(EsImportProperties.TableConfig tableConfig, LocalDate syncDate,
+                              String indexName, PollingJdbcReader.ReadBatch readBatch) {
 
+        long bulkStartedAt = System.currentTimeMillis();
         List<Map<String, Object>> rows = readBatch.rows();
         if (rows.isEmpty()) {
-            return;
+            return true;
         }
         String tableName = tableConfig.getTableName();
         String idColumn = tableConfig.getIdColumn();
@@ -98,7 +100,6 @@ public class PollingBulkWriter {
         String failureReason;
         for (int attempt = 1; attempt <= maxAttempts; attempt++) {
             try {
-                long startTime = System.currentTimeMillis();
                 BulkResponse response;
                 // 许可证只覆盖真实ES请求，响应判断和重试等待不占用全局并发额度
                 try (GlobalEsWritePermitManager.Permit ignored =
@@ -110,11 +111,7 @@ public class PollingBulkWriter {
                         .count();
                 if (!response.errors() && failedCount == 0L
                         && response.items().size() == rows.size()) {
-                    log.info("===> ES-Polling bulk completed. table={}, date={}, index={}, size={}, "
-                                    + "firstId={}, lastId={}, attempt={}, costMs={}",
-                            tableName, syncDate, indexName, rows.size(),
-                            firstId, lastId, attempt, System.currentTimeMillis() - startTime);
-                    return;
+                    return true;
                 }
                 String firstItemError = response.items().stream()
                         .filter(item -> item.error() != null)
@@ -135,9 +132,10 @@ public class PollingBulkWriter {
             if (attempt >= maxAttempts) {
                 log.error("===> ES-Polling bulk retries exhausted, continue next batch. "
                                 + "table={}, date={}, index={}, attempts={}, size={}, "
-                                + "firstId={}, lastId={}, error={}",
+                                + "firstId={}, lastId={}, costMs={}, error={}",
                         tableName, syncDate, indexName, maxAttempts,
-                        rows.size(), firstId, lastId, failureReason);
+                        rows.size(), firstId, lastId,
+                        System.currentTimeMillis() - bulkStartedAt, failureReason);
                 try {
                     // 失败批次由对账和人工T+1修复闭环；通知提交失败也不能阻止Polling继续
                     notifyService.notifyPollingBulkFailed(tableName, indexName, syncDate,
@@ -148,7 +146,7 @@ public class PollingBulkWriter {
                             tableName, syncDate, firstId, lastId,
                             notifyError.getMessage(), notifyError);
                 }
-                return;
+                return false;
             }
             log.error("===> ES-Polling bulk failed, retry whole batch. table={}, date={}, index={}, "
                             + "attempt={}/{}, size={}, firstId={}, lastId={}, error={}",
@@ -161,5 +159,6 @@ public class PollingBulkWriter {
                 Thread.interrupted();
             }
         }
+        return false;
     }
 }

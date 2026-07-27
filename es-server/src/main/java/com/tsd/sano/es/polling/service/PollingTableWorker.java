@@ -160,28 +160,48 @@ public class PollingTableWorker implements Runnable {
                     stopGracefully();
                     return;
                 }
+
+                long cycleStartedAt = System.currentTimeMillis();
+                long previousLastId = lastId;
                 // QUERYING设置在线程真正进入JDBC前，drain在此后到达时等待本次SQL返回
                 stage = Stage.QUERYING;
                 // Polling业务日期与MySQL DATETIME统一按部署约定的UTC+8本地时间计算，不做时区转换
                 LocalDateTime queryStartedAt = LocalDateTime.now();
+                long mysqlStartedAt = System.currentTimeMillis();
                 PollingJdbcReader.ReadBatch batch = jdbcReader.readBatch(tableConfig, syncDate, lastId,
                         properties.getPolling().getReadBatchSize());
+                long mysqlCostMs = System.currentTimeMillis() - mysqlStartedAt;
                 lastActivityAt = Instant.now();
 
                 if (!batch.isEmpty()) {
                     stage = Stage.BULK_WRITING;
                     String indexName = indexAlias + "_" + INDEX_DATE_FORMATTER.format(syncDate);
+                    long esStartedAt = System.currentTimeMillis();
                     // BulkWriter内部完成整批重试；成功或重试耗尽告警后都会返回并推进查询游标
-                    bulkWriter.writeBatch(tableConfig, syncDate, indexName, batch);
+                    boolean bulkSuccessful = bulkWriter.writeBatch(tableConfig, syncDate, indexName, batch);
+                    long esCostMs = System.currentTimeMillis() - esStartedAt;
                     lastId = batch.lastId();
                     lastActivityAt = Instant.now();
+                    log.info("===> ES-Polling cycle completed. table={}, date={}, size={}, "
+                                    + "previousLastId={}, nextLastId={}, mysqlCostMs={}, esCostMs={}, "
+                                    + "totalCostMs={}, result={}",
+                            tableName, syncDate, batch.rows().size(),
+                            previousLastId, lastId, mysqlCostMs, esCostMs,
+                            System.currentTimeMillis() - cycleStartedAt,
+                            bulkSuccessful ? "SUCCESS" : "BULK_FAILED_CONTINUED");
                     if (stopRequested) {
-                        // drain在Bulk期间到达时等待完整重试结束，再保存已推进的查询游标
+                        // drain在Bulk期间到达时等待完整重试结束，再保存已推进的查询游标。
                         stopGracefully();
                         return;
                     }
                     continue;
                 }
+
+                log.info("===> ES-Polling cycle completed. table={}, date={}, size=0, "
+                                + "previousLastId={}, nextLastId={}, mysqlCostMs={}, esCostMs=0, "
+                                + "totalCostMs={}, result=EMPTY",
+                        tableName, syncDate, previousLastId, lastId,
+                        mysqlCostMs, System.currentTimeMillis() - cycleStartedAt);
 
                 if (stopRequested) {
                     // SQL已经返回空批次，无需再进入日期判断，直接保存当前内存游标
@@ -270,6 +290,8 @@ public class PollingTableWorker implements Runnable {
                 }
             }
         } catch (RuntimeException error) {
+            log.error("===> ES-Polling worker cycle failed. table={}, date={}, lastId={}, stage={}, error={}",
+                    tableName, syncDate, lastId, stage, error.getMessage(), error);
             pauseOnError(error);
         } finally {
             if (stage != Stage.PAUSED && stage != Stage.STOPPED) {
