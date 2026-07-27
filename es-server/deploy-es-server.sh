@@ -37,7 +37,7 @@ INTERNAL_QUERY_BASE_URL="${INTERNAL_QUERY_BASE_URL:-http://127.0.0.1:8102}"
 if [ -z "${NGINX_SMOKE_COMMAND:-}" ]; then
   NGINX_SMOKE_COMMAND="curl -fsS --connect-timeout 5 --max-time 30 -H 'token: ${SYNC_API_TOKEN}' '${PUBLIC_QUERY_BASE_URL}/ready' >/dev/null && curl -fsS --connect-timeout 5 --max-time 30 -H 'token: ${SYNC_API_TOKEN}' '${INTERNAL_QUERY_BASE_URL}/ready' >/dev/null"
 fi
-# 版本B可配置检查命令验证租约、表状态和checkpoint推进；版本A允许留空。
+# 版本B可配置检查命令验证表状态和checkpoint推进；版本A允许留空。
 POST_START_SYNC_CHECK_COMMAND="${POST_START_SYNC_CHECK_COMMAND:-}"
 
 # 正式常驻实例固定为all；Compose变量必须导出，确保实际容器与脚本检查目标一致。
@@ -498,7 +498,7 @@ verify_new_sync_runtime() {
   log "新版同步协调器已恢复RUNNING。"
 
   if [ -n "${POST_START_SYNC_CHECK_COMMAND}" ]; then
-    log "执行版本B同步租约、表状态及checkpoint推进检查。"
+    log "执行版本B同步表状态及checkpoint推进检查。"
     bash -c "${POST_START_SYNC_CHECK_COMMAND}" || fail "新版同步恢复扩展检查失败。"
   fi
 }

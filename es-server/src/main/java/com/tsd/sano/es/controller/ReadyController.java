@@ -3,6 +3,10 @@ package com.tsd.sano.es.controller;
 import co.elastic.clients.elasticsearch.ElasticsearchClient;
 import com.tsd.sano.es.importer.pipeline.config.EsImportProperties;
 import com.tsd.sano.es.importer.taskstore.SanoImportTaskService;
+import com.tsd.sano.es.polling.model.SyncCheckpoint;
+import com.tsd.sano.es.polling.service.PollingSyncCoordinator;
+import com.tsd.sano.es.polling.service.SyncCheckpointService;
+import com.tsd.sano.es.polling.service.PollingTableWorker;
 import com.tsd.sano.es.sync.config.EsServiceMode;
 import com.tsd.sano.es.sync.config.EsServiceModeManager;
 import org.springframework.http.HttpStatus;
@@ -19,7 +23,8 @@ import java.util.Optional;
  * 面向容器编排和部署脚本的严格就绪检查。
  *
  * <p>/health只说明Web进程存活；/ready还会按server-mode验证ES访问能力、
- * T+1任务索引。业务任务失败不会让整个查询实例失活，但会由同步状态接口展示。</p>
+ * T+1任务索引，以及Polling内部索引、协调器和本机Worker。单表业务暂停不会让
+ * 整个查询实例失活，但会由同步状态接口展示。</p>
  */
 @RestController
 public class ReadyController {
@@ -28,6 +33,8 @@ public class ReadyController {
     private final EsImportProperties importProperties;
     private final SanoImportTaskService importTaskService;
     private final EsServiceModeManager serviceModeManager;
+    private final SyncCheckpointService checkpointService;
+    private final PollingSyncCoordinator pollingCoordinator;
 
     /**
      * 注入查询链路、T+1任务索引及服务模式检查所需组件。
@@ -35,11 +42,15 @@ public class ReadyController {
     public ReadyController(ElasticsearchClient elasticsearchClient,
                            EsImportProperties importProperties,
                            SanoImportTaskService importTaskService,
-                           EsServiceModeManager serviceModeManager) {
+                           EsServiceModeManager serviceModeManager,
+                           SyncCheckpointService checkpointService,
+                           PollingSyncCoordinator pollingCoordinator) {
         this.elasticsearchClient = elasticsearchClient;
         this.importProperties = importProperties;
         this.importTaskService = importTaskService;
         this.serviceModeManager = serviceModeManager;
+        this.checkpointService = checkpointService;
+        this.pollingCoordinator = pollingCoordinator;
     }
 
     /**
@@ -55,7 +66,11 @@ public class ReadyController {
         // all和query模式都承担查询职责，因此两种模式都必须通过相同的真实Alias查询检查。
         try {
             elasticsearchClient.info();
-            Optional<EsImportProperties.TableConfig> smokeTable = firstEnabledTable();
+            List<EsImportProperties.TableConfig> tPlusOneTables = importProperties.getTPlusOneTables();
+            List<EsImportProperties.TableConfig> pollingTables = importProperties.getPollingTables();
+            Optional<EsImportProperties.TableConfig> smokeTable = !tPlusOneTables.isEmpty()
+                    ? Optional.of(tPlusOneTables.getFirst())
+                    : pollingTables.stream().findFirst();
             if (smokeTable.isPresent()) {
                 String indexAlias = smokeTable.get().getIndexAlias();
                 // 仅连接ES并不能证明业务Alias可查询；size=0可验证Alias、权限和查询链路，且不拉取文档。
@@ -89,10 +104,10 @@ public class ReadyController {
                 details.add("T_PLUS_ONE_DISABLED_BY_GLOBAL_SWITCH");
             }
 
-            if (hasPollingTables) {
-                // 当前仍处于版本A，配置polling表必须阻止实例被误判为可同步。
-                syncReady = false;
-                details.add("POLLING_ENGINE_NOT_IMPLEMENTED");
+            if (hasPollingTables && importProperties.getPolling().isEnabled()) {
+                syncReady = checkPollingReadiness(details) && syncReady;
+            } else if (hasPollingTables) {
+                details.add("POLLING_DISABLED_BY_GLOBAL_SWITCH");
             }
         }
 
@@ -103,15 +118,62 @@ public class ReadyController {
     }
 
     /**
-     * 选择一张已启用表执行轻量查询。表模式只决定同步引擎，不影响查询就绪检查。
+     * 检查Polling内部索引、协调器以及每张RUNNING表是否具备本机执行能力。
      */
-    private Optional<EsImportProperties.TableConfig> firstEnabledTable() {
-        List<EsImportProperties.TableConfig> tPlusOneTables = importProperties.getTPlusOneTables();
-        if (!tPlusOneTables.isEmpty()) {
-            return Optional.of(tPlusOneTables.get(0));
+    private boolean checkPollingReadiness(List<String> details) {
+        try {
+            if (!checkpointService.exists()) {
+                details.add("POLLING_CHECKPOINT_INDEX_MISSING");
+                return false;
+            }
+
+            PollingSyncCoordinator.Snapshot coordinator = pollingCoordinator.snapshot();
+            if (coordinator.state() != PollingSyncCoordinator.State.RUNNING || !coordinator.running()) {
+                details.add("POLLING_COORDINATOR_NOT_READY: state=" + coordinator.state()
+                        + ", error=" + coordinator.lastError());
+                return false;
+            }
+
+            boolean ready = true;
+            for (EsImportProperties.TableConfig table : importProperties.getPollingTables()) {
+                Optional<SyncCheckpoint> checkpointOptional = checkpointService.find(table.getTableName());
+                if (checkpointOptional.isEmpty()) {
+                    ready = false;
+                    details.add("POLLING_CHECKPOINT_MISSING: " + table.getTableName());
+                    continue;
+                }
+
+                SyncCheckpoint checkpoint = checkpointOptional.get();
+                if (checkpoint.getStatus() == SyncCheckpoint.Status.PAUSED) {
+                    // PAUSED是单表业务状态，需要运维处理，但不能拖垮整个查询服务的ready。
+                    details.add("POLLING_TABLE_PAUSED: " + table.getTableName()
+                            + ", error=" + checkpoint.getLastError());
+                    continue;
+                }
+                if (checkpoint.getStatus() != SyncCheckpoint.Status.RUNNING) {
+                    ready = false;
+                    details.add("POLLING_TABLE_STATUS_INVALID: " + table.getTableName()
+                            + ", status=" + checkpoint.getStatus());
+                    continue;
+                }
+
+                PollingTableWorker.Snapshot worker = coordinator.workers().get(table.getTableName());
+                if (worker != null) {
+                    details.add("POLLING_TABLE_WORKER_RUNNING: " + table.getTableName());
+                } else if (coordinator.workers().size()
+                        >= importProperties.getPolling().getMaxActiveTables()) {
+                    // 达到配置的表级并发上限时，剩余RUNNING表等待空闲槽位属于正常调度状态。
+                    details.add("POLLING_TABLE_WAITING_FOR_SLOT: " + table.getTableName());
+                } else {
+                    ready = false;
+                    details.add("POLLING_TABLE_WORKER_MISSING: " + table.getTableName());
+                }
+            }
+            return ready;
+        } catch (Exception error) {
+            details.add("POLLING_UNAVAILABLE: " + safeMessage(error));
+            return false;
         }
-        List<EsImportProperties.TableConfig> pollingTables = importProperties.getPollingTables();
-        return pollingTables.isEmpty() ? Optional.empty() : Optional.of(pollingTables.get(0));
     }
 
     /**

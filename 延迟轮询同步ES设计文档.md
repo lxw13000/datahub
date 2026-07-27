@@ -1,5 +1,9 @@
 # 延迟轮询同步 ES 设计文档
 
+> **归档说明：本文记录已放弃的旧版本 B 架构，不再作为当前开发依据。**
+> 当前实现以《延迟轮询同步ES简化版设计.md》为准；本文中的队列、并行 Bulk、
+> Sequence、有序状态写入器、ES 租约、错误池和持久化对账任务均未采用。
+>
 > 状态：基础能力版本A已完成并上线；polling版本B待开发且保持关闭。修订日期：2026-07-22。
 
 ## 1. 目标与适用范围
@@ -1104,7 +1108,7 @@ com.tsd.sano.es
 │   │   └── SyncStatus.java
 │   ├── service
 │   │   ├── PollingSyncCoordinator.java
-│   │   ├── TablePollingWorker.java
+│   │   ├── PollingTableWorker.java
 │   │   ├── PollingBulkWriter.java
 │   │   ├── OrderedCheckpointTracker.java
 │   │   ├── TableStateWriter.java
@@ -1118,7 +1122,7 @@ com.tsd.sano.es
 实现时避免将无限循环、SQL、ES Bulk、checkpoint、Lark 通知全部堆在一个类。边界建议：
 
 1. 继续由现有 `EsImportProperties.TableConfig` 绑定 `sano.import.tables`；配置加载时直接完成默认值规范化、校验，并生成T+1与polling两个只读列表，不再复制为另一套表定义模型。
-2. `TablePollingWorker` 只负责一张表的查询节流和批次投递。
+2. `PollingTableWorker` 负责一张表的查询节流和批次投递。
 3. `PollingBulkWriter` 只负责按 `batch.target_index` 生成 ES Bulk、错误分类与回调。
 4. `GlobalEsWritePermitManager` 位于公共同步层，为 polling 保留实时额度并限制 T+1 借用并发；不保存任何表数据或 checkpoint。
 5. `GlobalSyncMemoryLimiter` 统一计算 importer 与 polling 已排队、在途和等待重试的数据估算字节数。

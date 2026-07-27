@@ -34,4 +34,25 @@ public class AsyncConfig {
         executor.initialize();
         return executor;
     }
+
+    /**
+     * 创建统计对账、Polling历史索引删除和失败批次通知使用的后台执行器。
+     *
+     * <p>该执行器与T+1任务分离，承载不应阻塞同步主循环的最佳努力副作用。
+     * 应用关闭时不等待队列执行完成，也不增加对应的YML线程和队列配置。</p>
+     *
+     * @return 已初始化的对账后台执行器
+     */
+    @Bean(name = "esReconcileExecutor")
+    public Executor esReconcileExecutor() {
+        ThreadPoolTaskExecutor executor = new ThreadPoolTaskExecutor();
+        executor.setCorePoolSize(1);
+        executor.setMaxPoolSize(5);
+        executor.setQueueCapacity(20);
+        executor.setKeepAliveSeconds(60);
+        executor.setThreadNamePrefix("ES-reconcile-");
+        executor.setWaitForTasksToCompleteOnShutdown(false);
+        executor.initialize();
+        return executor;
+    }
 }

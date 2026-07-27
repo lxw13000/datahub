@@ -76,9 +76,26 @@ sano:
       # T+1批量写入期间是否临时将索引副本数调整为0。
       disable-replica: true
 
+    polling:
+      # Polling总开关；主循环实现并完成验证前保持关闭。
+      enabled: false
+      # 当前实例允许同时持有并运行的Polling表数量。
+      max-active-tables: 5
+      # 当前日期查询为空后再次轮询MySQL的等待时间。
+      poll-interval: 5s
+      # 次日零点后继续等待旧日期晚到数据的时间。
+      date-close-delay: 10m
+      # 每次按日期和递增ID读取MySQL的最大记录数。
+      read-batch-size: 3000
+      # ES整批Bulk失败后的重试次数，不包含首次请求。
+      bulk-retry-times: 2
+      # 每次整批Bulk重试前的固定等待时间。
+      bulk-retry-interval: 1s
+
     # T+1与polling共用同一表目录；enabled=false时两种引擎都忽略该表。
-    # index-alias是业务查询Alias，table-name是MySQL源表，mapping-file位于resources/esmapping。
+    # table-name是同步表唯一标识；index-alias为空时默认等于table-name，仅作为业务查询Alias。
     # sync-mode未配置时默认t-plus-one；polling首次启动还必须配置bootstrap-start-date。
+    # reconcile未配置时默认true；同步流程统一异步调用，对账入口按单表配置决定是否实际执行。
     # id-column用于MySQL游标和ES文档ID；dt-column/dt-column-type/where-sql决定日期查询条件。
     # delete-history-index和reserve-days控制成功导入后的历史索引清理。
     tables:
@@ -88,6 +105,8 @@ sano:
         mapping-file: sano_wallet_coin_record.json
         # 单表自动同步模式；未配置时默认t-plus-one，polling模式需同时配置bootstrap-start-date。
         sync-mode: t-plus-one
+        # 是否执行该表的异步统计对账；关闭后异步入口收到调用会直接跳过。
+        reconcile: true
         id-column: id
         dt-column: dt
         # 导入完成是否删除该表历史索引

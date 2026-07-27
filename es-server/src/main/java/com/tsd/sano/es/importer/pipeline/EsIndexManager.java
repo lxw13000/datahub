@@ -13,6 +13,7 @@ import com.tsd.sano.es.importer.util.MappingLoader;
 import org.apache.commons.lang3.StringUtils;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.scheduling.annotation.Async;
 import org.springframework.stereotype.Service;
 
 import java.io.IOException;
@@ -96,6 +97,53 @@ public class EsIndexManager {
     }
 
     /**
+     * 幂等准备Polling业务日期的物理索引，并确保索引绑定业务Alias。
+     *
+     * <p>新索引在创建请求中直接绑定Alias；索引已存在时补充一次幂等Alias绑定，
+     * 适用于实例重启或并发准备同一日期索引的场景。</p>
+     *
+     * @return 准备完成的物理索引名
+     */
+    public String preparePollingIndex(EsImportProperties.TableConfig tableConfig, LocalDate syncDate) {
+        if (tableConfig == null) {
+            throw new ServiceException("ES polling table config cannot be null");
+        }
+        if (syncDate == null) {
+            throw new ServiceException("ES polling syncDate cannot be null");
+        }
+
+        String alias = requireText(tableConfig.getIndexAlias(), "indexAlias");
+        String mappingFile = requireText(tableConfig.getMappingFile(), "mappingFile");
+        String indexName = alias + "_" + INDEX_DATE_FORMATTER.format(syncDate);
+        if (exists(indexName)) {
+            bindAlias(indexName, alias);
+            return indexName;
+        }
+
+        try (InputStream mapping = mappingLoader.load(mappingFile)) {
+            CreateIndexRequest request = new CreateIndexRequest.Builder()
+                    .index(indexName)
+                    .withJson(mapping)
+                    .aliases(alias, aliasBuilder -> aliasBuilder)
+                    .build();
+            CreateIndexResponse response = client.indices().create(request);
+            if (!response.acknowledged()) {
+                throw new ServiceException("ES polling index creation was not acknowledged, index="
+                        + indexName);
+            }
+            log.info("===> ES-Polling index created. index={}, alias={}", indexName, alias);
+        } catch (IOException | ElasticsearchException error) {
+            // exists与create之间可能由另一个实例完成创建；并发创建成功后仍补做一次幂等Alias绑定。
+            if (!exists(indexName)) {
+                throw new ServiceException("ES polling index creation failed, index=" + indexName
+                        + ", error=" + error.getMessage(), error);
+            }
+            bindAlias(indexName, alias);
+        }
+        return indexName;
+    }
+
+    /**
      * 导入前优化索引参数，降低大批量写入成本。
      */
     public void beforeImport(ImportContext context) {
@@ -136,11 +184,18 @@ public class EsIndexManager {
      * <p>当前V2按 alias_yyyyMMdd 保存每日分区索引，业务alias需要同时指向
      * 保留期内的多个日期索引；因此这里只追加alias，不移除旧索引alias。</p>
      */
-    public boolean switchAlias(ImportContext context) {
+    public void switchAlias(ImportContext context) {
         EsImportConfig config = requireConfig(context);
         String indexName = requireText(config.getIndexName(), "indexName");
         String alias = requireText(config.getIndexAlias(), "indexAlias");
 
+        bindAlias(indexName, alias);
+    }
+
+    /**
+     * 幂等为指定物理索引绑定业务Alias。
+     */
+    private void bindAlias(String indexName, String alias) {
         try {
             // 历史索引是否可查由deleteHistoryIndices控制，不能在这里批量移除旧alias。
             UpdateAliasesResponse response = client.indices().updateAliases(request -> request
@@ -153,7 +208,6 @@ public class EsIndexManager {
             boolean acknowledged = response.acknowledged();
             log.info("===> ES-Import bind alias result. alias={}, index={}, acknowledged={}",
                     alias, indexName, acknowledged);
-            return acknowledged;
         } catch (IOException | ElasticsearchException e) {
             throw new ServiceException("ES bind alias failed, alias=" + alias + ", index=" + indexName
                     + ", error=" + e.getMessage());
@@ -187,12 +241,41 @@ public class EsIndexManager {
     }
 
     /**
+     * 按单表配置和已完成日期清理一个刚过保留期的Polling历史索引。
+     *
+     * <p>该方法与T+1使用相同的确定日期计算规则，不扫描Alias下的全部索引。
+     * 调用方可以异步执行；索引不存在和删除失败都按最佳努力处理。</p>
+     */
+    @Async("esReconcileExecutor")
+    public void deleteHistoryIndex(EsImportProperties.TableConfig tableConfig, LocalDate completedDate) {
+        if (tableConfig == null || completedDate == null || !tableConfig.isDeleteHistoryIndex()) {
+            return;
+        }
+
+        try {
+            String alias = requireText(tableConfig.getIndexAlias(), "indexAlias");
+            int reserveDays = Math.max(1, tableConfig.getReserveDays());
+            String expiredIndex = alias + "_"
+                    + INDEX_DATE_FORMATTER.format(completedDate.minusDays(reserveDays));
+            if (!exists(expiredIndex)) {
+                return;
+            }
+            deleteIndexQuietly(expiredIndex);
+        } catch (RuntimeException error) {
+            // Polling历史删除是最佳努力任务，执行失败只记录日志，不反向影响已推进的checkpoint。
+            log.warn("===> ES-Polling delete history index failed. alias={}, date={}, error={}",
+                    tableConfig.getIndexAlias(), completedDate, error.getMessage(), error);
+        }
+    }
+
+    /**
      * 检查指定真实索引是否存在。
      */
     public boolean exists(String indexName) {
         try {
             // exists接口用于保护创建流程，避免覆盖已有索引。
-            BooleanResponse response = client.indices().exists(request -> request.index(indexName));
+            ExistsRequest request = new ExistsRequest.Builder().index(indexName).build();
+            BooleanResponse response = client.indices().exists(request);
             return response.value();
         } catch (IOException | ElasticsearchException e) {
             throw new ServiceException("ES check index exists failed, index=" + indexName

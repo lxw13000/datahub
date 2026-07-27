@@ -8,23 +8,20 @@ import com.tsd.sano.es.importer.pipeline.model.ImportStatistics;
 import com.tsd.sano.es.importer.pipeline.model.ImportStopReason;
 import com.tsd.sano.es.importer.taskstore.model.SanoImportTask;
 import com.tsd.sano.es.importer.taskstore.model.SanoImportTaskStatus;
+import com.tsd.sano.es.polling.service.PollingSyncCoordinator;
 import com.tsd.sano.es.sync.config.EsServiceModeManager;
 import org.springframework.stereotype.Component;
 
 import java.time.Instant;
-import java.util.ArrayList;
-import java.util.LinkedHashSet;
-import java.util.List;
-import java.util.Set;
-import java.util.UUID;
+import java.util.*;
 import java.util.function.Supplier;
 
 /**
- * 当前同步实例的统一部署排空协调器。
+ * 当前同步实例的统一部署排空协调器
  *
- * <p>该类只保存当前JVM的协调器状态和drain结果，不覆盖 T+1 任务或未来 polling
+ * <p>该类只保存当前JVM的协调器状态和drain结果，不覆盖T+1任务或Polling
  * checkpoint中的持久业务状态。任务启动、drain切换和cancel恢复都在同一监视器下
- * 线性化，避免已经报告DRAINED后又启动新任务。</p>
+ * 线性化，避免已经报告DRAINED后又启动新任务</p>
  */
 @Component
 public class SyncDrainCoordinator {
@@ -33,43 +30,58 @@ public class SyncDrainCoordinator {
     private final GlobalSyncMemoryLimiter memoryLimiter;
     private final EsImportProperties importProperties;
     private final EsServiceModeManager serviceModeManager;
+    private final PollingSyncCoordinator pollingCoordinator;
     private final long drainTimeoutMillis;
 
-    /** 协调器运行态；DRAINING在cancel前始终拒绝新同步工作。 */
+    /**
+     * 协调器运行态；DRAINING在cancel前始终拒绝新同步工作
+     */
     private CoordinatorState coordinatorState = CoordinatorState.RUNNING;
 
-    /** 当前或最近一次drain操作。 */
+    /**
+     * 当前或最近一次drain操作
+     */
     private DrainOperation operation;
 
-    /** T+1调度器是否仍在创建、扫描或执行任务。 */
+    /**
+     * T+1调度器是否仍在创建、扫描或执行任务
+     */
     private boolean tPlusOneDispatcherActive;
 
-    /** 当前唯一的T+1活动任务。现有调度器按任务串行执行。 */
+    /**
+     * 当前唯一的T+1活动任务现有调度器按任务串行执行
+     */
     private TPlusOneTaskRuntime activeTPlusOneTask;
 
-    /** 最近一次持久任务摘要，用于活动任务结束后的status观察。 */
+    /**
+     * 最近一次持久任务摘要，用于活动任务结束后的status观察
+     */
     private PersistentTaskSnapshot lastPersistentTask;
 
-    /** cancel后等待精确重投的、本次drain产生的任务ID。 */
+    /**
+     * cancel后等待精确重投的、本次drain产生的任务ID
+     */
     private final Set<String> pendingResumeTaskIds = new LinkedHashSet<>();
 
     /**
-     * 注入排空判定所需的共享资源快照、同步配置和服务模式门禁。
+     * 注入排空判定所需的共享资源快照、同步配置和服务模式门禁
      */
     public SyncDrainCoordinator(GlobalEsWritePermitManager permitManager,
-                                 GlobalSyncMemoryLimiter memoryLimiter,
-                                 EsImportProperties importProperties,
-                                 EsServiceModeManager serviceModeManager) {
+                                GlobalSyncMemoryLimiter memoryLimiter,
+                                EsImportProperties importProperties,
+                                EsServiceModeManager serviceModeManager,
+                                PollingSyncCoordinator pollingCoordinator) {
         this.permitManager = permitManager;
         this.memoryLimiter = memoryLimiter;
         this.importProperties = importProperties;
         this.serviceModeManager = serviceModeManager;
+        this.pollingCoordinator = pollingCoordinator;
         this.drainTimeoutMillis = Math.max(1,
                 importProperties.getCommon().getDrainTimeoutSeconds()) * 1000L;
     }
 
     /**
-     * 幂等启动全局drain。返回后不会再有新的T+1调度器或任务越过启动门禁。
+     * 幂等启动全局drain返回后不会再有新的T+1调度器或任务越过启动门禁
      */
     public synchronized DrainStatusSnapshot startDrain() {
         serviceModeManager.requireSyncEnabled();
@@ -85,6 +97,7 @@ public class SyncDrainCoordinator {
 
         coordinatorState = CoordinatorState.DRAINING;
         operation = new DrainOperation(UUID.randomUUID().toString(), System.currentTimeMillis());
+        pollingCoordinator.requestDrain();
         if (activeTPlusOneTask != null && activeTPlusOneTask.context != null) {
             activeTPlusOneTask.context.requestDrainStop(operation.operationId);
         }
@@ -93,7 +106,7 @@ public class SyncDrainCoordinator {
     }
 
     /**
-     * 取消当前drain并恢复接收新工作。operationId为空时取消当前操作；传值时必须匹配。
+     * 取消当前drain并恢复接收新工作operationId为空时取消当前操作；传值时必须匹配
      */
     public synchronized DrainStatusSnapshot cancelDrain(String operationId) {
         serviceModeManager.requireSyncEnabled();
@@ -112,11 +125,12 @@ public class SyncDrainCoordinator {
         operation.cancelRequested = true;
         operation.completedAtMillis = System.currentTimeMillis();
         pendingResumeTaskIds.addAll(operation.interruptedTaskIds);
+        pollingCoordinator.resumeAfterDrainCancel();
         return snapshotLocked();
     }
 
     /**
-     * 返回当前状态，并在读取前重新计算排空完成或超时结果。
+     * 返回当前状态，并在读取前重新计算排空完成或超时结果
      */
     public synchronized DrainStatusSnapshot status() {
         evaluateDrainLocked();
@@ -124,7 +138,7 @@ public class SyncDrainCoordinator {
     }
 
     /**
-     * 原子注册一个普通T+1调度器。drain先发生时返回false。
+     * 原子注册一个普通T+1调度器drain先发生时返回false
      */
     public synchronized boolean tryStartTPlusOneDispatcher() {
         if (!serviceModeManager.isSyncEnabled()
@@ -137,7 +151,7 @@ public class SyncDrainCoordinator {
     }
 
     /**
-     * 调度器退出后重新评估drain；任务终态持久化必须先于该调用。
+     * 调度器退出后重新评估drain；任务终态持久化必须先于该调用
      */
     public synchronized void onTPlusOneDispatcherStopped() {
         tPlusOneDispatcherActive = false;
@@ -145,7 +159,7 @@ public class SyncDrainCoordinator {
     }
 
     /**
-     * 在drain门禁内执行新增任务记录等短操作，确保drain返回后不会再创建新工作。
+     * 在drain门禁内执行新增任务记录等短操作，确保drain返回后不会再创建新工作
      */
     public synchronized <T> T callIfAcceptingNewWork(Supplier<T> action, T rejectedValue) {
         if (!serviceModeManager.isSyncEnabled() || coordinatorState != CoordinatorState.RUNNING) {
@@ -155,7 +169,7 @@ public class SyncDrainCoordinator {
     }
 
     /**
-     * 在任务落RUNNING前注册活动任务；与startDrain共享同一原子边界。
+     * 在任务落RUNNING前注册活动任务；与startDrain共享同一原子边界
      */
     public synchronized boolean tryBeginTPlusOneTask(SanoImportTask task) {
         if (!serviceModeManager.isSyncEnabled()
@@ -171,7 +185,7 @@ public class SyncDrainCoordinator {
     }
 
     /**
-     * 任务状态成功持久化为RUNNING后刷新管理接口摘要。
+     * 任务状态成功持久化为RUNNING后刷新管理接口摘要
      */
     public synchronized void onTPlusOneTaskRunning(SanoImportTask task) {
         if (matchesActiveTask(task.getTaskId())) {
@@ -180,7 +194,7 @@ public class SyncDrainCoordinator {
     }
 
     /**
-     * 将Reader/Bulk上下文挂到当前任务；drain已先发生时立即把停止信号送达上下文。
+     * 将Reader/Bulk上下文挂到当前任务；drain已先发生时立即把停止信号送达上下文
      */
     public synchronized void attachTPlusOneContext(EsImportConfig config, ImportContext context) {
         if (activeTPlusOneTask == null || !activeTPlusOneTask.indexName.equals(config.getIndexName())) {
@@ -193,7 +207,7 @@ public class SyncDrainCoordinator {
     }
 
     /**
-     * 活动任务达到持久终态后注销运行令牌，并记录本次drain是否需要cancel重投。
+     * 活动任务达到持久终态后注销运行令牌，并记录本次drain是否需要cancel重投
      */
     public synchronized void finishTPlusOneTask(SanoImportTask task,
                                                 SanoImportTaskStatus terminalStatus,
@@ -237,7 +251,7 @@ public class SyncDrainCoordinator {
     }
 
     /**
-     * cancel后原子领取需要立即重投的任务，同时占用dispatcher令牌。
+     * cancel后原子领取需要立即重投的任务，同时占用dispatcher令牌
      */
     public synchronized List<String> tryClaimCancelledDrainResumeTasks() {
         if (!serviceModeManager.isSyncEnabled()
@@ -253,7 +267,7 @@ public class SyncDrainCoordinator {
     }
 
     /**
-     * 重投线程提交失败或被新drain阻止时，归还尚未执行的任务ID。
+     * 重投线程提交失败或被新drain阻止时，归还尚未执行的任务ID
      */
     public synchronized void returnCancelledDrainResumeTasks(List<String> taskIds) {
         if (taskIds != null) {
@@ -264,21 +278,21 @@ public class SyncDrainCoordinator {
     }
 
     /**
-     * 当前是否允许调度器继续扫描和启动任务。
+     * 当前是否允许调度器继续扫描和启动任务
      */
     public synchronized boolean isAcceptingNewWork() {
         return serviceModeManager.isSyncEnabled() && coordinatorState == CoordinatorState.RUNNING;
     }
 
     /**
-     * 判断任务ID是否属于当前注册的T+1活动任务。
+     * 判断任务ID是否属于当前注册的T+1活动任务
      */
     private boolean matchesActiveTask(String taskId) {
         return activeTPlusOneTask != null && activeTPlusOneTask.taskId.equals(taskId);
     }
 
     /**
-     * 完成判据同时检查调度器、活动任务、真实Bulk许可和全局内存预留。
+     * 完成判据同时检查调度器、活动任务、真实Bulk许可和全局内存预留
      */
     private void evaluateDrainLocked() {
         if (coordinatorState != CoordinatorState.DRAINING
@@ -289,7 +303,18 @@ public class SyncDrainCoordinator {
 
         GlobalEsWritePermitManager.Snapshot permits = permitManager.snapshot();
         GlobalSyncMemoryLimiter.Snapshot memory = memoryLimiter.snapshot();
-        boolean pipelineStopped = !tPlusOneDispatcherActive && activeTPlusOneTask == null;
+        PollingSyncCoordinator.DrainStatus polling = pollingCoordinator.drainStatus();
+        if (polling.stopped() && !polling.safe()) {
+            operation.result = DrainResult.FAILED;
+            operation.error = "Polling final checkpoint was not saved for tables: "
+                    + polling.failedTables();
+            operation.completedAtMillis = System.currentTimeMillis();
+            return;
+        }
+
+        boolean pipelineStopped = !tPlusOneDispatcherActive
+                && activeTPlusOneTask == null
+                && polling.stopped();
         boolean resourcesReturned = permits.activeTotal() == 0
                 && permits.waitingPolling() == 0
                 && permits.waitingTPlusOne() == 0
@@ -310,12 +335,13 @@ public class SyncDrainCoordinator {
     }
 
     /**
-     * 在协调器锁内组装当前排空、流水线和共享资源快照。
+     * 在协调器锁内组装当前排空、流水线和共享资源快照
      */
     private DrainStatusSnapshot snapshotLocked() {
         GlobalEsWritePermitManager.Snapshot permits = permitManager.snapshot();
         GlobalSyncMemoryLimiter.Snapshot memory = memoryLimiter.snapshot();
         TPlusOneRuntimeSnapshot runtime = buildTPlusOneSnapshot(permits);
+        PollingSyncCoordinator.DrainStatus polling = pollingCoordinator.drainStatus();
         String serviceMode = serviceModeManager.currentMode().name();
         return new DrainStatusSnapshot(
                 serviceMode,
@@ -327,12 +353,13 @@ public class SyncDrainCoordinator {
                         ? null : Instant.ofEpochMilli(operation.completedAtMillis),
                 operation == null ? null : operation.error,
                 runtime,
+                polling,
                 new ResourceSnapshot(permits, memory)
         );
     }
 
     /**
-     * 组合T+1持久任务摘要与当前JVM流水线运行状态。
+     * 组合T+1持久任务摘要与当前JVM流水线运行状态
      */
     private TPlusOneRuntimeSnapshot buildTPlusOneSnapshot(GlobalEsWritePermitManager.Snapshot permits) {
         TPlusOneTaskRuntime active = activeTPlusOneTask;
@@ -361,41 +388,57 @@ public class SyncDrainCoordinator {
     }
 
     /**
-     * 协调器是否继续接受新同步工作的内存运行态。
+     * 协调器是否继续接受新同步工作的内存运行态
      */
     public enum CoordinatorState {
-        /** 正常接受同步调度和任务。 */
+        /**
+         * 正常接受同步调度和任务
+         */
         RUNNING,
 
-        /** 拒绝新工作并等待现有工作到达安全边界。 */
+        /**
+         * 拒绝新工作并等待现有工作到达安全边界
+         */
         DRAINING
     }
 
     /**
-     * 最近一次drain操作结果；与协调器运行态和持久业务状态相互独立。
+     * 最近一次drain操作结果；与协调器运行态和持久业务状态相互独立
      */
     public enum DrainResult {
-        /** 当前进程尚未发起过drain。 */
+        /**
+         * 当前进程尚未发起过drain
+         */
         NOT_STARTED,
 
-        /** 已发起drain，仍在等待流水线或资源排空。 */
+        /**
+         * 已发起drain，仍在等待流水线或资源排空
+         */
         IN_PROGRESS,
 
-        /** 已安全排空，且已有任务没有业务失败。 */
+        /**
+         * 已安全排空，且已有任务没有业务失败
+         */
         DRAINED,
 
-        /** 已安全排空，但已有任务包含业务失败。 */
+        /**
+         * 已安全排空，但已有任务包含业务失败
+         */
         DRAINED_WITH_ERRORS,
 
-        /** 未在时限内安全排空或任务终态无法可靠持久化。 */
+        /**
+         * 未在时限内安全排空或任务终态无法可靠持久化
+         */
         FAILED,
 
-        /** 操作被显式取消，协调器已恢复接收新工作。 */
+        /**
+         * 操作被显式取消，协调器已恢复接收新工作
+         */
         CANCELLED
     }
 
     /**
-     * 管理接口返回的完整排空状态。
+     * 管理接口返回的完整排空状态
      */
     public record DrainStatusSnapshot(String serviceMode,
                                       CoordinatorState coordinatorState,
@@ -405,11 +448,12 @@ public class SyncDrainCoordinator {
                                       Instant completedAt,
                                       String error,
                                       TPlusOneRuntimeSnapshot tPlusOne,
+                                      PollingSyncCoordinator.DrainStatus polling,
                                       ResourceSnapshot resources) {
     }
 
     /**
-     * T+1调度器、活动任务、Reader、队列和安全断点的运行快照。
+     * T+1调度器、活动任务、Reader、队列和安全断点的运行快照
      */
     public record TPlusOneRuntimeSnapshot(boolean enabled,
                                           boolean dispatcherActive,
@@ -426,7 +470,7 @@ public class SyncDrainCoordinator {
     }
 
     /**
-     * T+1持久任务状态摘要，不使用协调器状态替代任务终态。
+     * T+1持久任务状态摘要，不使用协调器状态替代任务终态
      */
     public record PersistentTaskSnapshot(String taskId,
                                          String indexAlias,
@@ -439,38 +483,54 @@ public class SyncDrainCoordinator {
     }
 
     /**
-     * drain完成判定使用的全局Bulk许可和内存预算快照。
+     * drain完成判定使用的全局Bulk许可和内存预算快照
      */
     public record ResourceSnapshot(GlobalEsWritePermitManager.Snapshot bulkPermits,
                                    GlobalSyncMemoryLimiter.Snapshot memory) {
     }
 
     /**
-     * 当前或最近一次drain的可变操作状态，仅在协调器锁内访问。
+     * 当前或最近一次drain的可变操作状态，仅在协调器锁内访问
      */
     private static final class DrainOperation {
-        /** 唯一操作ID，用于阻止旧部署脚本取消新一轮drain。 */
+        /**
+         * 唯一操作ID，用于阻止旧部署脚本取消新一轮drain
+         */
         private final String operationId;
 
-        /** 发起时间，用于超时判断。 */
+        /**
+         * 发起时间，用于超时判断
+         */
         private final long requestedAtMillis;
 
-        /** 本次drain打断且可在cancel后精确续跑的任务ID。 */
+        /**
+         * 本次drain打断且可在cancel后精确续跑的任务ID
+         */
         private final Set<String> interruptedTaskIds = new LinkedHashSet<>();
 
-        /** 当前drain结果。 */
+        /**
+         * 当前drain结果
+         */
         private DrainResult result = DrainResult.IN_PROGRESS;
 
-        /** 操作结束时间，进行中时为0。 */
+        /**
+         * 操作结束时间，进行中时为0
+         */
         private long completedAtMillis;
 
-        /** 排空期间是否出现任务级业务失败。 */
+        /**
+         * 排空期间是否出现任务级业务失败
+         */
         private boolean hadBusinessErrors;
 
-        /** 是否已收到取消请求。 */
+        /**
+         * 是否已收到取消请求
+         */
         private boolean cancelRequested;
 
-        /** drain失败原因。 */
+        /**
+         * drain失败原因
+         */
         private String error;
 
         private DrainOperation(String operationId, long requestedAtMillis) {
@@ -480,7 +540,7 @@ public class SyncDrainCoordinator {
     }
 
     /**
-     * 当前T+1活动任务在本JVM中的运行信息，与ES任务文档分开保存。
+     * 当前T+1活动任务在本JVM中的运行信息，与ES任务文档分开保存
      */
     private static final class TPlusOneTaskRuntime {
         private final String taskId;
@@ -489,13 +549,19 @@ public class SyncDrainCoordinator {
         private final String tableName;
         private final String importDate;
 
-        /** 上下文尚未挂载时使用的任务持久安全断点。 */
+        /**
+         * 上下文尚未挂载时使用的任务持久安全断点
+         */
         private final long lastSafeCheckpointId;
 
-        /** 当前观察到的持久任务状态。 */
+        /**
+         * 当前观察到的持久任务状态
+         */
         private String taskStatus;
 
-        /** Reader/Bulk启动后挂载的单次导入上下文。 */
+        /**
+         * Reader/Bulk启动后挂载的单次导入上下文
+         */
         private ImportContext context;
 
         private TPlusOneTaskRuntime(SanoImportTask task) {

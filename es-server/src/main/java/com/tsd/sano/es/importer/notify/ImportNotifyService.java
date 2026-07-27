@@ -4,18 +4,22 @@ import com.tsd.sano.es.core.config.NotifyProperties;
 import com.tsd.sano.es.importer.pipeline.config.EsImportProperties;
 import com.tsd.sano.es.importer.pipeline.model.ImportStatistics;
 import com.tsd.sano.es.importer.taskstore.model.SanoImportTask;
+import com.tsd.sano.es.reconcile.model.ReconcileResult;
 import org.apache.commons.lang3.StringUtils;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.scheduling.annotation.Async;
 import org.springframework.stereotype.Service;
 
 import java.time.Duration;
+import java.time.LocalDate;
 import java.util.List;
 
 /**
  * 导入任务通知服务。
  *
- * <p>每个任务结束后按结果发送一条通知，通知失败只记录日志，不影响任务状态。</p>
+ * <p>T+1任务结束、Polling异常批次和对账结果按各自业务边界发送通知。
+ * 通知失败只记录日志，不影响同步状态和游标推进。</p>
  *
  * @author lxw
  */
@@ -24,7 +28,9 @@ public class ImportNotifyService {
 
     private static final Logger log = LoggerFactory.getLogger(ImportNotifyService.class);
 
-    /** 导入消息标题前缀，由业务通知服务定义，不属于通用消息通道配置。 */
+    /**
+     * 导入消息标题前缀，由业务通知服务定义，不属于通用消息通道配置。
+     */
     private static final String SUBJECT_PREFIX = "[SANO-ES]";
 
     private final EsImportProperties importProperties;
@@ -71,7 +77,7 @@ public class ImportNotifyService {
                     .append("安全断点ID：").append(task.getLastSuccessId()).append('\n')
                     .append("耗时ms：").append(costMs(task));
 
-            dispatch(new ImportNotifyMessage("SUCCESS", title, content.toString()), task);
+            dispatch(new ImportNotifyMessage("SUCCESS", title, content.toString()), taskId(task));
         } catch (Exception e) {
             // 通知入口整体隔离，避免消息组装或配置异常影响导入主流程。
             log.error("===> ES-Import notify success failed before send. taskId={}, error={}",
@@ -112,7 +118,7 @@ public class ImportNotifyService {
                     .append("耗时ms：").append(costMs(task)).append('\n')
                     .append("错误：").append(StringUtils.left(errorMessage, 800));
 
-            dispatch(new ImportNotifyMessage("FAILED", title, content.toString()), task);
+            dispatch(new ImportNotifyMessage("FAILED", title, content.toString()), taskId(task));
         } catch (Exception e) {
             // 通知入口整体隔离，避免失败告警异常反向覆盖原始导入异常。
             log.error("===> ES-Import notify failure failed before send. taskId={}, error={}",
@@ -158,7 +164,7 @@ public class ImportNotifyService {
                     .append("耗时ms：").append(costMs(task)).append('\n')
                     .append("说明：已停止继续读取MySQL，剩余数据下次任务继续同步。");
 
-            dispatch(new ImportNotifyMessage("TIMEOUT_PARTIAL", title, content.toString()), task);
+            dispatch(new ImportNotifyMessage("TIMEOUT_PARTIAL", title, content.toString()), taskId(task));
         } catch (Exception e) {
             // 通知入口整体隔离，超时暂停状态以任务索引为准，通知失败只记录日志。
             log.error("===> ES-Import notify timeout partial failed before send. taskId={}, error={}",
@@ -167,12 +173,114 @@ public class ImportNotifyService {
     }
 
     /**
+     * Polling表因系统性错误持久暂停后发送一次停止通知。
+     *
+     * <p>通知失败只记录日志，不能改变已经保存的PAUSED状态。</p>
+     */
+    public void notifyPollingStopped(String tableName, String indexName,
+                                     LocalDate syncDate, long lastId, Throwable error) {
+        try {
+            if (!notifyProperties.isEnabled()) {
+                return;
+            }
+
+            String title = SUBJECT_PREFIX + " ES Polling同步已停止 " + indexName;
+            String content = new StringBuilder(384)
+                    .append(title).append('\n')
+                    .append("表名：").append(tableName).append('\n')
+                    .append("索引：").append(indexName).append('\n')
+                    .append("业务日期：").append(syncDate).append('\n')
+                    .append("安全断点ID：").append(lastId).append('\n')
+                    .append("状态：PAUSED").append('\n')
+                    .append("错误：").append(StringUtils.left(
+                            error == null ? "Unknown polling synchronization error" : error.getMessage(),
+                            800
+                    ))
+                    .toString();
+            dispatch(new ImportNotifyMessage("POLLING_STOPPED", title, content), tableName);
+        } catch (Exception notifyError) {
+            log.error("===> ES-Polling notify stopped failed before send. table={}, error={}",
+                    tableName, notifyError.getMessage(), notifyError);
+        }
+    }
+
+    /**
+     * 异步通知Polling整批重试耗尽，但不暂停该表。
+     *
+     * <p>失败批次已经按最大ID推进，后续由统计对账发现差异，并由运维提交指定日期
+     * T+1全量修复。通知提交或发送失败均不能阻塞Polling主循环。</p>
+     */
+    @Async("esReconcileExecutor")
+    public void notifyPollingBulkFailed(String tableName, String indexName,
+                                        LocalDate syncDate, long firstId, long lastId,
+                                        int attempts, String error) {
+        try {
+            if (!notifyProperties.isEnabled()) {
+                return;
+            }
+
+            String title = SUBJECT_PREFIX + " ES Polling批次写入失败 " + indexName;
+            String content = new StringBuilder(480)
+                    .append(title).append('\n')
+                    .append("表名：").append(tableName).append('\n')
+                    .append("索引：").append(indexName).append('\n')
+                    .append("业务日期：").append(syncDate).append('\n')
+                    .append("失败批次ID：").append(firstId).append(" - ").append(lastId).append('\n')
+                    .append("Bulk尝试次数：").append(attempts).append('\n')
+                    .append("处理：已跳过该批并继续Polling，等待对账后人工T+1修复。").append('\n')
+                    .append("错误：").append(StringUtils.left(error, 800))
+                    .toString();
+            dispatch(new ImportNotifyMessage(
+                    "POLLING_BULK_FAILED_CONTINUED", title, content), tableName);
+        } catch (Exception notifyError) {
+            log.error("===> ES-Polling notify bulk failure failed before send. "
+                            + "table={}, date={}, firstId={}, lastId={}, error={}",
+                    tableName, syncDate, firstId, lastId,
+                    notifyError.getMessage(), notifyError);
+        }
+    }
+
+    /**
+     * 发送单表单日统计对账结果。
+     *
+     * <p>匹配、不匹配和执行失败都发送消息；通知通道失败不能改变同步及对账结果。</p>
+     */
+    public void notifyReconcileResult(ReconcileResult result) {
+        try {
+            if (!notifyProperties.isEnabled()) {
+                return;
+            }
+
+            String title = SUBJECT_PREFIX + " ES数据对账 " + result.status() + " " + result.indexName();
+            StringBuilder content = new StringBuilder(480)
+                    .append(title).append('\n')
+                    .append("表名：").append(result.tableName()).append('\n')
+                    .append("索引：").append(result.indexName()).append('\n')
+                    .append("业务日期：").append(result.reconcileDate()).append('\n')
+                    .append("结果：").append(result.status()).append('\n')
+                    .append("MySQL：").append(formatStatistics(result.mysql())).append('\n')
+                    .append("Elasticsearch：").append(formatStatistics(result.elasticsearch()));
+            if (StringUtils.isNotBlank(result.error())) {
+                content.append('\n').append("错误：").append(StringUtils.left(result.error(), 800));
+            }
+            dispatch(new ImportNotifyMessage(
+                    "RECONCILE_" + result.status().name(), title, content.toString()), result.indexName());
+        } catch (Exception notifyError) {
+            log.error("===> ES-Reconcile notify failed before send. table={}, date={}, error={}",
+                    result == null ? null : result.tableName(),
+                    result == null ? null : result.reconcileDate(),
+                    notifyError.getMessage(),
+                    notifyError);
+        }
+    }
+
+    /**
      * 分发通知到所有启用的通知渠道。
      */
-    private void dispatch(ImportNotifyMessage message, SanoImportTask task) {
+    private void dispatch(ImportNotifyMessage message, String businessId) {
         if (notifiers == null || notifiers.isEmpty()) {
-            log.warn("===> ES-Import notify skipped because no notifier bean exists. eventType={}, taskId={}",
-                    message.getEventType(), taskId(task));
+            log.warn("===> ES-Import notify skipped because no notifier bean exists. eventType={}, businessId={}",
+                    message.getEventType(), businessId);
             return;
         }
 
@@ -181,10 +289,22 @@ public class ImportNotifyService {
                 notifier.send(message);
             } catch (Exception e) {
                 // 通知失败不能影响导入任务状态，避免告警链路反向拖垮同步链路。
-                log.error("===> ES-Import notify failed. eventType={}, taskId={}, notifier={}, error={}",
-                        message.getEventType(), taskId(task), notifier.getClass().getSimpleName(), e.getMessage(), e);
+                log.error("===> ES-Import notify failed. eventType={}, businessId={}, notifier={}, error={}",
+                        message.getEventType(), businessId, notifier.getClass().getSimpleName(), e.getMessage(), e);
             }
         }
+    }
+
+    /**
+     * 格式化单侧对账统计，未成功取得时明确显示不可用。
+     */
+    private String formatStatistics(ReconcileResult.Statistics statistics) {
+        if (statistics == null) {
+            return "N/A";
+        }
+        return "count=" + statistics.count()
+                + ", minId=" + statistics.minId()
+                + ", maxId=" + statistics.maxId();
     }
 
     /**

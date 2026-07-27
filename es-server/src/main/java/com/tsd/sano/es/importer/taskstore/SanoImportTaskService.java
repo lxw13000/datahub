@@ -5,15 +5,19 @@ import co.elastic.clients.elasticsearch._types.ElasticsearchException;
 import co.elastic.clients.elasticsearch._types.FieldValue;
 import co.elastic.clients.elasticsearch._types.OpType;
 import co.elastic.clients.elasticsearch._types.Refresh;
+import co.elastic.clients.elasticsearch._types.Result;
+import co.elastic.clients.elasticsearch._types.Script;
 import co.elastic.clients.elasticsearch._types.SortOrder;
 import co.elastic.clients.elasticsearch.core.GetResponse;
 import co.elastic.clients.elasticsearch.core.IndexRequest;
 import co.elastic.clients.elasticsearch.core.IndexResponse;
 import co.elastic.clients.elasticsearch.core.SearchResponse;
+import co.elastic.clients.elasticsearch.core.UpdateRequest;
 import co.elastic.clients.elasticsearch.core.UpdateResponse;
 import co.elastic.clients.elasticsearch.core.search.Hit;
 import co.elastic.clients.elasticsearch.indices.CreateIndexRequest;
 import co.elastic.clients.elasticsearch.indices.CreateIndexResponse;
+import co.elastic.clients.json.JsonData;
 import co.elastic.clients.transport.endpoints.BooleanResponse;
 import com.tsd.sano.es.core.exception.ServiceException;
 import com.tsd.sano.es.importer.util.MappingLoader;
@@ -52,6 +56,36 @@ public class SanoImportTaskService {
      * 任务索引Mapping文件。
      */
     private static final String TASK_MAPPING_FILE = "sano_import_task.json";
+
+    /**
+     * 原子创建或重置Polling历史修复任务。
+     *
+     * <p>PENDING、RUNNING和TIMEOUT_PARTIAL都表示任务仍可能被执行，不允许重复提交；
+     * 已结束任务可以重置为PENDING，以便运维再次全量覆盖同一历史日期。</p>
+     */
+    private static final String RESET_REPAIR_TASK_SCRIPT = """
+            if (ctx._source.status == params.pending
+                    || ctx._source.status == params.running
+                    || ctx._source.status == params.timeout_partial) {
+                ctx.op = 'noop';
+                return;
+            }
+            ctx._source.table_name = params.table_name;
+            ctx._source.index_alias = params.index_alias;
+            ctx._source.index_name = params.index_name;
+            ctx._source.import_date = params.import_date;
+            ctx._source.status = params.pending;
+            ctx._source.last_success_id = 0L;
+            ctx._source.total_count = 0L;
+            ctx._source.success_count = 0L;
+            ctx._source.failed_count = 0L;
+            ctx._source.run_count = 0;
+            ctx._source.last_error = null;
+            ctx._source.started_at = null;
+            ctx._source.finished_at = null;
+            ctx._source.created_at = params.now;
+            ctx._source.updated_at = params.now;
+            """;
 
     private final ElasticsearchClient client;
     private final MappingLoader mappingLoader;
@@ -162,6 +196,64 @@ public class SanoImportTaskService {
             }
             throw new ServiceException("ES import add task failed, taskId=" + task.getTaskId()
                     + ", error=" + e.getMessage(), e);
+        }
+    }
+
+    /**
+     * 新增或重新提交一条Polling历史修复任务。
+     *
+     * <p>文档ID仍使用 {@code tableName_importDate}，不增加任务类型字段。ES Update在主分片上
+     * 原子判断现有状态，避免两个接口请求同时把同表同日任务重置为可执行状态。</p>
+     *
+     * @param task 已通过Polling历史日期门禁的任务
+     * @return true表示任务已创建或由终态重置，false表示已有未结束任务
+     */
+    public boolean addOrResetPollingRepairTask(SanoImportTask task) {
+        requireTaskNotNull(task);
+        LocalDateTime now = LocalDateTime.now();
+        task.setTaskId(task.buildTaskId());
+        task.setStatus(SanoImportTaskStatus.PENDING.name());
+        task.setLastSuccessId(0L);
+        task.setTotalCount(0L);
+        task.setSuccessCount(0L);
+        task.setFailedCount(0L);
+        task.setRunCount(0);
+        task.setLastError(null);
+        task.setStartedAt(null);
+        task.setFinishedAt(null);
+        task.setCreatedAt(now);
+        task.setUpdatedAt(now);
+
+        Script script = new Script.Builder()
+                .lang("painless")
+                .source(RESET_REPAIR_TASK_SCRIPT)
+                .params("pending", JsonData.of(SanoImportTaskStatus.PENDING.name()))
+                .params("running", JsonData.of(SanoImportTaskStatus.RUNNING.name()))
+                .params("timeout_partial", JsonData.of(SanoImportTaskStatus.TIMEOUT_PARTIAL.name()))
+                .params("table_name", JsonData.of(task.getTableName()))
+                .params("index_alias", JsonData.of(task.getIndexAlias()))
+                .params("index_name", JsonData.of(task.getIndexName()))
+                .params("import_date", JsonData.of(task.getImportDate()))
+                .params("now", JsonData.of(now.toString()))
+                .build();
+        try {
+            UpdateRequest<SanoImportTask, SanoImportTask> request =
+                    new UpdateRequest.Builder<SanoImportTask, SanoImportTask>()
+                            .index(TASK_INDEX)
+                            .id(task.getTaskId())
+                            .refresh(Refresh.WaitFor)
+                            .retryOnConflict(3)
+                            .script(script)
+                            .upsert(task)
+                            .build();
+            UpdateResponse<SanoImportTask> response = client.update(request, SanoImportTask.class);
+            boolean accepted = response.result() != Result.NoOp;
+            log.info("===> ES-Import polling repair task submit result. taskId={}, result={}",
+                    task.getTaskId(), response.result());
+            return accepted;
+        } catch (IOException | ElasticsearchException error) {
+            throw new ServiceException("ES import submit polling repair task failed, taskId="
+                    + task.getTaskId() + ", error=" + error.getMessage(), error);
         }
     }
 
