@@ -16,6 +16,8 @@ import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.time.format.DateTimeFormatter;
 import java.util.Optional;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.TimeUnit;
 
 /**
  * 单张Polling表的串行同步Worker
@@ -31,6 +33,11 @@ public class PollingTableWorker implements Runnable {
      * Polling每日物理索引命名格式
      */
     private static final DateTimeFormatter INDEX_DATE_FORMATTER = DateTimeFormatter.BASIC_ISO_DATE;
+
+    /**
+     * 当前日期连续空查询后的固定退避秒数；达到300秒后保持该间隔
+     */
+    private static final long[] EMPTY_POLL_BACKOFF_SECONDS = {10L, 30L, 60L, 300L};
 
     /**
      * 当前表配置
@@ -86,6 +93,11 @@ public class PollingTableWorker implements Runnable {
      * drain或协调器发出的停止标记
      */
     private volatile boolean stopRequested;
+
+    /**
+     * 用于提前结束空查询退避，避免最长300秒等待阻塞drain
+     */
+    private final CountDownLatch stopSignal = new CountDownLatch(1);
 
     /**
      * 当前串行执行阶段，仅用于状态和drain边界判断
@@ -152,6 +164,7 @@ public class PollingTableWorker implements Runnable {
         log.info("===> ES-Polling worker started. table={}, date={}, lastId={}",
                 tableName, syncDate, lastId);
 
+        int emptyPollBackoffIndex = 0;
         try {
             while (true) {
                 stage = Stage.IDLE;
@@ -174,6 +187,8 @@ public class PollingTableWorker implements Runnable {
                 lastActivityAt = Instant.now();
 
                 if (!batch.isEmpty()) {
+                    // 一旦读到数据，下一次空查询重新从10秒开始退避
+                    emptyPollBackoffIndex = 0;
                     stage = Stage.BULK_WRITING;
                     String indexName = indexAlias + "_" + INDEX_DATE_FORMATTER.format(syncDate);
                     long esStartedAt = System.currentTimeMillis();
@@ -220,10 +235,20 @@ public class PollingTableWorker implements Runnable {
                 LocalDateTime closeTime = syncDate.plusDays(1)
                         .atStartOfDay()
                         .plus(closeDelay);
-                if (syncDate.equals(today) || queryStartedAt.isBefore(closeTime)) {
-                    // 当前日期持续轮询；旧日期在关闭时间前也必须保留，以接收允许范围内的晚到数据
+                if (syncDate.equals(today)) {
+                    // 当天连续空查询按10、30、60、300秒逐级退避，降低无数据时的MySQL轮询压力
+                    long backoffSeconds = EMPTY_POLL_BACKOFF_SECONDS[emptyPollBackoffIndex];
+                    if (emptyPollBackoffIndex < EMPTY_POLL_BACKOFF_SECONDS.length - 1) {
+                        emptyPollBackoffIndex++;
+                    }
                     stage = Stage.IDLE;
-                    waitForNextPoll();
+                    waitForNextPoll(Duration.ofSeconds(backoffSeconds));
+                    continue;
+                }
+                if (queryStartedAt.isBefore(closeTime)) {
+                    // 旧日期在关闭时间前仍按基础间隔查询，以接收日期关闭延迟范围内的晚到数据
+                    stage = Stage.IDLE;
+                    waitForNextPoll(properties.getPolling().getPollInterval());
                     continue;
                 }
 
@@ -269,6 +294,7 @@ public class PollingTableWorker implements Runnable {
                 SyncCheckpoint nextCheckpoint = advanced.get();
                 syncDate = nextCheckpoint.getSyncDate();
                 lastId = nextCheckpoint.getLastId();
+                emptyPollBackoffIndex = 0;
                 lastActivityAt = Instant.now();
                 log.info("===> ES-Polling date advanced. table={}, date={}, lastId={}",
                         tableName, syncDate, lastId);
@@ -309,6 +335,7 @@ public class PollingTableWorker implements Runnable {
      */
     public void requestStop() {
         stopRequested = true;
+        stopSignal.countDown();
     }
 
     /**
@@ -391,16 +418,16 @@ public class PollingTableWorker implements Runnable {
     }
 
     /**
-     * 等待下一轮当前日期查询；drain中断只用于提前结束等待
+     * 等待下一轮查询；drain停止信号可提前结束等待
      */
-    private void waitForNextPoll() {
-        Duration interval = properties.getPolling().getPollInterval();
+    private void waitForNextPoll(Duration interval) {
         try {
-            Thread.sleep(Math.max(1L, interval.toMillis()));
+            stopSignal.await(Math.max(1L, interval.toMillis()), TimeUnit.MILLISECONDS);
         } catch (InterruptedException error) {
             // 执行器关闭产生的中断也按优雅停止处理，不把正常停机误判为业务错误
             Thread.interrupted();
             stopRequested = true;
+            stopSignal.countDown();
         }
     }
 
