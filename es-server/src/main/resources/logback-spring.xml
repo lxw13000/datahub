@@ -211,17 +211,17 @@
         <logger name="com.zaxxer.hikari" level="INFO"/>
 
         <!-- 导入相关日志单独落文件，同时继续向 root 传递。 -->
-        <logger name="com.tsd.sano.es.importer" level="DEBUG" additivity="true">
+        <logger name="com.tsd.sano.es.modules.tplusone" level="DEBUG" additivity="true">
             <appender-ref ref="ASYNC_IMPORT_FILE"/>
         </logger>
 
         <!-- 导入失败ID独立落文件，避免混入普通导入进度日志。 -->
-        <logger name="com.tsd.sano.es.importer.error" level="ERROR" additivity="false">
+        <logger name="com.tsd.sano.es.modules.tplusone.error" level="ERROR" additivity="true">
             <appender-ref ref="ASYNC_IMPORT_ERROR_FILE"/>
         </logger>
 
         <!-- Polling同步日志独立落文件，同时继续向root传递到开发控制台和应用总日志。 -->
-        <logger name="com.tsd.sano.es.polling" level="DEBUG" additivity="true">
+        <logger name="com.tsd.sano.es.modules.polling" level="DEBUG" additivity="true">
             <appender-ref ref="ASYNC_POLLING_FILE"/>
             <appender-ref ref="ASYNC_POLLING_ERROR_FILE"/>
         </logger>
@@ -230,7 +230,7 @@
         <logger name="com.tsd.sano.es.controller.coin" level="DEBUG" additivity="true">
             <appender-ref ref="ASYNC_SEARCH_API_FILE"/>
         </logger>
-        <logger name="com.tsd.sano.es.search" level="DEBUG" additivity="true">
+        <logger name="com.tsd.sano.es.modules.search" level="DEBUG" additivity="true">
             <appender-ref ref="ASYNC_SEARCH_API_FILE"/>
         </logger>
 
@@ -259,17 +259,17 @@
         <logger name="com.zaxxer.hikari" level="INFO"/>
 
         <!-- 生产导入日志独立保存，便于排查定时同步问题。 -->
-        <logger name="com.tsd.sano.es.importer" level="INFO" additivity="true">
+        <logger name="com.tsd.sano.es.modules.tplusone" level="INFO" additivity="true">
             <appender-ref ref="ASYNC_IMPORT_FILE"/>
         </logger>
 
         <!-- 导入失败ID独立落文件，便于按表名和ID回查数据源。 -->
-        <logger name="com.tsd.sano.es.importer.error" level="ERROR" additivity="false">
+        <logger name="com.tsd.sano.es.modules.tplusone.error" level="ERROR" additivity="true">
             <appender-ref ref="ASYNC_IMPORT_ERROR_FILE"/>
         </logger>
 
         <!-- 生产Polling日志独立保存；ERROR同时写入应用Polling错误日志。 -->
-        <logger name="com.tsd.sano.es.polling" level="INFO" additivity="true">
+        <logger name="com.tsd.sano.es.modules.polling" level="INFO" additivity="true">
             <appender-ref ref="ASYNC_POLLING_FILE"/>
             <appender-ref ref="ASYNC_POLLING_ERROR_FILE"/>
         </logger>
@@ -278,7 +278,7 @@
         <logger name="com.tsd.sano.es.controller.coin" level="INFO" additivity="true">
             <appender-ref ref="ASYNC_SEARCH_API_FILE"/>
         </logger>
-        <logger name="com.tsd.sano.es.search" level="INFO" additivity="true">
+        <logger name="com.tsd.sano.es.modules.search" level="INFO" additivity="true">
             <appender-ref ref="ASYNC_SEARCH_API_FILE"/>
         </logger>
 

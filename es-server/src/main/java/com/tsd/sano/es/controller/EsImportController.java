@@ -2,14 +2,15 @@ package com.tsd.sano.es.controller;
 
 import com.tsd.sano.es.core.exception.ServiceException;
 import com.tsd.sano.es.core.result.ResultVO;
-import com.tsd.sano.es.importer.pipeline.EsIndexManager;
-import com.tsd.sano.es.importer.pipeline.config.EsImportProperties;
-import com.tsd.sano.es.importer.task.EsImportTask;
-import com.tsd.sano.es.importer.taskstore.SanoImportTaskService;
-import com.tsd.sano.es.importer.taskstore.model.SanoImportTask;
-import com.tsd.sano.es.reconcile.service.ReconcileStatisticsService;
-import com.tsd.sano.es.polling.service.SyncCheckpointService;
-import com.tsd.sano.es.sync.config.EsServiceModeManager;
+import com.tsd.sano.es.modules.config.EsImportProperties;
+import com.tsd.sano.es.modules.config.EsServiceModeManager;
+import com.tsd.sano.es.modules.config.SyncTableConfig;
+import com.tsd.sano.es.modules.index.EsIndexManager;
+import com.tsd.sano.es.modules.polling.service.PollingIndexService;
+import com.tsd.sano.es.modules.reconcile.service.ReconcileStatisticsService;
+import com.tsd.sano.es.modules.tplusone.model.SanoImportTask;
+import com.tsd.sano.es.modules.tplusone.service.SanoImportTaskService;
+import com.tsd.sano.es.modules.tplusone.service.TPlusOneImportTask;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.apache.commons.lang3.StringUtils;
@@ -49,7 +50,7 @@ public class EsImportController {
     /**
      * T+1任务编排及Polling历史修复入口
      */
-    private final EsImportTask importTask;
+    private final TPlusOneImportTask importTask;
 
     /**
      * 启用表及其同步模式配置
@@ -72,9 +73,9 @@ public class EsImportController {
     private final EsServiceModeManager serviceModeManager;
 
     /**
-     * Polling checkpoint内部索引的人工初始化服务
+     * Polling日期索引和checkpoint管理服务，控制器仅调用其人工初始化能力。
      */
-    private final SyncCheckpointService checkpointService;
+    private final PollingIndexService pollingIndexService;
 
     /**
      * 创建T+1任务索引；query模式或T+1总开关关闭时拒绝执行
@@ -82,9 +83,9 @@ public class EsImportController {
     @GetMapping("/createImportTaskIndex")
     public ResultVO<String> createImportTaskIndex() {
         importTask.requireEnabled();
-        boolean index = importTaskService.createIndex();
+        importTaskService.createIndex();
 
-        return ResultVO.resultMsg(index, "创建导入任务索引");
+        return ResultVO.successMessage("创建导入任务索引");
     }
 
     /**
@@ -165,7 +166,7 @@ public class EsImportController {
     @GetMapping("/createSyncInternalIndices")
     public ResultVO<String> createSyncInternalIndices() {
         serviceModeManager.requireSyncEnabled();
-        boolean created = checkpointService.createIndex();
+        boolean created = pollingIndexService.createCheckpointIndex();
         return ResultVO.resultMsg(created, "Polling 创建同步内部索引");
     }
 
@@ -187,7 +188,7 @@ public class EsImportController {
         try {
             LocalDate reconcileDate = LocalDate.parse(date, IMPORT_DATE_FORMATTER);
             String normalizedTableName = tableName.trim();
-            EsImportProperties.TableConfig table = Stream.concat(
+            SyncTableConfig table = Stream.concat(
                             importProperties.getTPlusOneTables().stream(),
                             importProperties.getPollingTables().stream())
                     .filter(config -> StringUtils.equals(config.getTableName(), normalizedTableName))

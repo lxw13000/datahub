@@ -31,7 +31,7 @@ logging:
   level:
     root: INFO
     com.tsd.sano.es: DEBUG
-    com.tsd.sano.es.importer: DEBUG
+    com.tsd.sano.es.modules.tplusone: DEBUG
     org.springframework: INFO
     org.springframework.jdbc.core: INFO
     co.elastic.clients: INFO
@@ -74,15 +74,12 @@ sano:
     common:
       # 部署drain等待Reader、队列、Bulk和任务终态安全收敛的最长秒数。
       drain-timeout-seconds: ${SANO_ES_SYNC_DRAIN_TIMEOUT_SECONDS:600}
-      write:
-        # 所有同步引擎合计允许的在途ES Bulk请求数。
-        global-bulk-concurrency: ${SANO_ES_SYNC_GLOBAL_BULK_CONCURRENCY:3}
-        # polling有等待请求时为其保留的Bulk并发数。
-        polling-reserved-concurrency: ${SANO_ES_SYNC_POLLING_RESERVED_CONCURRENCY:2}
-        # polling空闲时T+1最多可使用的Bulk并发数。
-        t-plus-one-max-concurrency: ${SANO_ES_SYNC_T_PLUS_ONE_MAX_CONCURRENCY:3}
-        # T+1排队、在途和重试批次的合计内存预算。
-        global-queue-max-bytes: ${SANO_ES_SYNC_GLOBAL_QUEUE_MAX_BYTES:128MB}
+      # 所有同步引擎合计允许的在途ES Bulk请求数。
+      global-bulk-concurrency: ${SANO_ES_SYNC_GLOBAL_BULK_CONCURRENCY:3}
+      # polling有等待请求时为其保留的Bulk并发数。
+      polling-reserved-concurrency: ${SANO_ES_SYNC_POLLING_RESERVED_CONCURRENCY:2}
+      # polling空闲时T+1最多可使用的Bulk并发数。
+      t-plus-one-max-concurrency: ${SANO_ES_SYNC_T_PLUS_ONE_MAX_CONCURRENCY:3}
 
     t-plus-one:
       # T+1同步总开关；关闭后定时任务、手工导入和后台流水线均不执行。
@@ -99,6 +96,8 @@ sano:
       worker-count: 4
       # Reader到Bulk之间的批次队列容量。
       queue-capacity: 10
+      # T+1排队、在途和重试批次的合计内存预算。
+      queue-max-bytes: ${SANO_ES_SYNC_T_PLUS_ONE_QUEUE_MAX_BYTES:128MB}
       # 单次ES Bulk请求的最大文档数。
       bulk-actions: 3000
       # 单次ES Bulk请求的目标大小上限，单位MB。

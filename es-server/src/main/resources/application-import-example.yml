@@ -31,15 +31,12 @@ sano:
     common:
       # 部署drain等待Reader、队列、Bulk和任务终态安全收敛的最长秒数。
       drain-timeout-seconds: 600
-      write:
-        # 所有同步引擎合计允许的在途ES Bulk请求数。
-        global-bulk-concurrency: 3
-        # polling有等待请求时为其保留的Bulk并发数。
-        polling-reserved-concurrency: 2
-        # polling空闲时T+1最多可使用的Bulk并发数。
-        t-plus-one-max-concurrency: 3
-        # T+1排队、在途和重试批次的合计内存预算。
-        global-queue-max-bytes: 128MB
+      # 所有同步引擎合计允许的在途ES Bulk请求数。
+      global-bulk-concurrency: 3
+      # polling有等待请求时为其保留的Bulk并发数。
+      polling-reserved-concurrency: 2
+      # polling空闲时T+1最多可使用的Bulk并发数。
+      t-plus-one-max-concurrency: 3
 
     # T+1独有参数；polling和未来MQ分别维护自己的读取、队列、Bulk及重试配置。
     t-plus-one:
@@ -57,6 +54,8 @@ sano:
       worker-count: 4
       # Reader到Bulk之间的批次队列容量。
       queue-capacity: 30
+      # T+1排队、在途和重试批次的合计内存预算。
+      queue-max-bytes: 128MB
       # 单次ES Bulk请求的最大文档数。
       bulk-actions: 3000
       # 单次ES Bulk请求的目标大小上限，单位MB。

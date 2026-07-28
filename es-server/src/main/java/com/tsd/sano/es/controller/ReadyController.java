@@ -1,14 +1,15 @@
 package com.tsd.sano.es.controller;
 
 import co.elastic.clients.elasticsearch.ElasticsearchClient;
-import com.tsd.sano.es.importer.pipeline.config.EsImportProperties;
-import com.tsd.sano.es.importer.taskstore.SanoImportTaskService;
-import com.tsd.sano.es.polling.model.SyncCheckpoint;
-import com.tsd.sano.es.polling.service.PollingSyncCoordinator;
-import com.tsd.sano.es.polling.service.SyncCheckpointService;
-import com.tsd.sano.es.polling.service.PollingTableWorker;
-import com.tsd.sano.es.sync.config.EsServiceMode;
-import com.tsd.sano.es.sync.config.EsServiceModeManager;
+import com.tsd.sano.es.modules.config.EsImportProperties;
+import com.tsd.sano.es.modules.config.SyncTableConfig;
+import com.tsd.sano.es.modules.tplusone.service.SanoImportTaskService;
+import com.tsd.sano.es.modules.polling.model.SyncCheckpoint;
+import com.tsd.sano.es.modules.polling.service.PollingCoordinator;
+import com.tsd.sano.es.modules.polling.service.PollingIndexService;
+import com.tsd.sano.es.modules.polling.service.PollingTableWorker;
+import com.tsd.sano.es.modules.config.EsServiceMode;
+import com.tsd.sano.es.modules.config.EsServiceModeManager;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.GetMapping;
@@ -29,12 +30,23 @@ import java.util.Optional;
 @RestController
 public class ReadyController {
 
+    /** ES连接和业务Alias查询检查入口。 */
     private final ElasticsearchClient elasticsearchClient;
+
+    /** 当前启用的T+1、Polling能力和表目录配置。 */
     private final EsImportProperties importProperties;
+
+    /** T+1持久任务索引检查入口。 */
     private final SanoImportTaskService importTaskService;
+
+    /** 当前实例all/query运行模式。 */
     private final EsServiceModeManager serviceModeManager;
-    private final SyncCheckpointService checkpointService;
-    private final PollingSyncCoordinator pollingCoordinator;
+
+    /** Polling checkpoint索引及持久状态检查入口。 */
+    private final PollingIndexService pollingIndexService;
+
+    /** Polling协调器和Worker运行状态检查入口。 */
+    private final PollingCoordinator pollingCoordinator;
 
     /**
      * 注入查询链路、T+1任务索引及服务模式检查所需组件。
@@ -43,13 +55,13 @@ public class ReadyController {
                            EsImportProperties importProperties,
                            SanoImportTaskService importTaskService,
                            EsServiceModeManager serviceModeManager,
-                           SyncCheckpointService checkpointService,
-                           PollingSyncCoordinator pollingCoordinator) {
+                           PollingIndexService pollingIndexService,
+                           PollingCoordinator pollingCoordinator) {
         this.elasticsearchClient = elasticsearchClient;
         this.importProperties = importProperties;
         this.importTaskService = importTaskService;
         this.serviceModeManager = serviceModeManager;
-        this.checkpointService = checkpointService;
+        this.pollingIndexService = pollingIndexService;
         this.pollingCoordinator = pollingCoordinator;
     }
 
@@ -66,9 +78,9 @@ public class ReadyController {
         // all和query模式都承担查询职责，因此两种模式都必须通过相同的真实Alias查询检查。
         try {
             elasticsearchClient.info();
-            List<EsImportProperties.TableConfig> tPlusOneTables = importProperties.getTPlusOneTables();
-            List<EsImportProperties.TableConfig> pollingTables = importProperties.getPollingTables();
-            Optional<EsImportProperties.TableConfig> smokeTable = !tPlusOneTables.isEmpty()
+            List<SyncTableConfig> tPlusOneTables = importProperties.getTPlusOneTables();
+            List<SyncTableConfig> pollingTables = importProperties.getPollingTables();
+            Optional<SyncTableConfig> smokeTable = !tPlusOneTables.isEmpty()
                     ? Optional.of(tPlusOneTables.getFirst())
                     : pollingTables.stream().findFirst();
             if (smokeTable.isPresent()) {
@@ -122,21 +134,21 @@ public class ReadyController {
      */
     private boolean checkPollingReadiness(List<String> details) {
         try {
-            if (!checkpointService.exists()) {
+            if (!pollingIndexService.checkpointIndexExists()) {
                 details.add("POLLING_CHECKPOINT_INDEX_MISSING");
                 return false;
             }
 
-            PollingSyncCoordinator.Snapshot coordinator = pollingCoordinator.snapshot();
-            if (coordinator.state() != PollingSyncCoordinator.State.RUNNING || !coordinator.running()) {
+            PollingCoordinator.Snapshot coordinator = pollingCoordinator.snapshot();
+            if (coordinator.state() != PollingCoordinator.State.RUNNING) {
                 details.add("POLLING_COORDINATOR_NOT_READY: state=" + coordinator.state()
                         + ", error=" + coordinator.lastError());
                 return false;
             }
 
             boolean ready = true;
-            for (EsImportProperties.TableConfig table : importProperties.getPollingTables()) {
-                Optional<SyncCheckpoint> checkpointOptional = checkpointService.find(table.getTableName());
+            for (SyncTableConfig table : importProperties.getPollingTables()) {
+                Optional<SyncCheckpoint> checkpointOptional = pollingIndexService.find(table.getTableName());
                 if (checkpointOptional.isEmpty()) {
                     ready = false;
                     details.add("POLLING_CHECKPOINT_MISSING: " + table.getTableName());

@@ -31,7 +31,9 @@ logging:
   level:
     root: INFO
     com.tsd.sano.es: INFO
-    com.tsd.sano.es.importer: INFO
+    com.tsd.sano.es.modules.tplusone: INFO
+    # 正式环境保留Polling生命周期日志，不输出DEBUG级别的每批循环日志。
+    com.tsd.sano.es.modules.polling: INFO
     org.springframework: INFO
     org.springframework.jdbc.core: INFO
     co.elastic.clients: WARN
@@ -75,15 +77,12 @@ sano:
     common:
       # 部署drain等待Reader、队列、Bulk和任务终态安全收敛的最长秒数。
       drain-timeout-seconds: ${SANO_ES_SYNC_DRAIN_TIMEOUT_SECONDS:600}
-      write:
-        # 所有同步引擎合计允许的在途ES Bulk请求数。
-        global-bulk-concurrency: ${SANO_ES_SYNC_GLOBAL_BULK_CONCURRENCY:3}
-        # polling有等待请求时为其保留的Bulk并发数。
-        polling-reserved-concurrency: ${SANO_ES_SYNC_POLLING_RESERVED_CONCURRENCY:2}
-        # polling空闲时T+1最多可使用的Bulk并发数。
-        t-plus-one-max-concurrency: ${SANO_ES_SYNC_T_PLUS_ONE_MAX_CONCURRENCY:3}
-        # T+1排队、在途和重试批次的合计内存预算。
-        global-queue-max-bytes: ${SANO_ES_SYNC_GLOBAL_QUEUE_MAX_BYTES:128MB}
+      # 所有同步引擎合计允许的在途ES Bulk请求数。
+      global-bulk-concurrency: ${SANO_ES_SYNC_GLOBAL_BULK_CONCURRENCY:3}
+      # polling有等待请求时为其保留的Bulk并发数。
+      polling-reserved-concurrency: ${SANO_ES_SYNC_POLLING_RESERVED_CONCURRENCY:2}
+      # polling空闲时T+1最多可使用的Bulk并发数。
+      t-plus-one-max-concurrency: ${SANO_ES_SYNC_T_PLUS_ONE_MAX_CONCURRENCY:3}
 
     t-plus-one:
       # 正式主实例默认开启T+1；临时query实例由Compose覆盖为false。
@@ -100,6 +99,8 @@ sano:
       worker-count: 4
       # Reader到Bulk之间的批次队列容量；每个元素是一批read-batch-size数据。
       queue-capacity: 16
+      # T+1排队、在途和重试批次的合计内存预算。
+      queue-max-bytes: ${SANO_ES_SYNC_T_PLUS_ONE_QUEUE_MAX_BYTES:128MB}
       # 单次ES Bulk请求的最大文档数。
       bulk-actions: 3000
       # 单次ES Bulk请求的目标大小上限，单位MB。
@@ -120,8 +121,8 @@ sano:
       disable-replica: true
 
     polling:
-      # Polling总开关；主循环实现并完成验证前保持关闭。
-      enabled: ${SANO_ES_POLLING_ENABLED:false}
+      # 正式环境默认启用Polling；需要临时停用时可通过环境变量覆盖。
+      enabled: ${SANO_ES_POLLING_ENABLED:true}
       # 当前实例允许同时持有并运行的Polling表数量。
       max-active-tables: ${SANO_ES_POLLING_MAX_ACTIVE_TABLES:5}
       # 当前日期查询为空后再次轮询MySQL的等待时间。
@@ -148,7 +149,7 @@ sano:
         mapping-file: sano_wallet_coin_record.json
         # 使用延迟轮询同步；首次没有checkpoint时从指定业务日期开始。
         sync-mode: polling
-        bootstrap-start-date: 2026-07-27
+        bootstrap-start-date: 2026-07-28
         reconcile: true
         # 导入完成是否删除该表历史索引
         delete-history-index: true

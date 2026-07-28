@@ -5,7 +5,7 @@ import com.tsd.sano.es.controller.diamond.dto.SatDiamond7DayDTO;
 import com.tsd.sano.es.controller.diamond.dto.SearchDiamondRecordDTO;
 import com.tsd.sano.es.controller.diamond.vo.DiamondRecordVO;
 import com.tsd.sano.es.core.result.ResultVO;
-import com.tsd.sano.es.search.WalletDiamondRecordSearch;
+import com.tsd.sano.es.modules.search.service.WalletDiamondRecordSearch;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.web.bind.annotation.PostMapping;

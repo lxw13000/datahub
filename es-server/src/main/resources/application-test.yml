@@ -31,7 +31,9 @@ logging:
   level:
     root: INFO
     com.tsd.sano.es: DEBUG
-    com.tsd.sano.es.importer: DEBUG
+    com.tsd.sano.es.modules.tplusone: DEBUG
+    # 测试环境输出Polling每批循环日志，便于核对读取、写入耗时和游标推进。
+    com.tsd.sano.es.modules.polling: DEBUG
     org.springframework: INFO
     org.springframework.jdbc.core: INFO
     co.elastic.clients: INFO
@@ -75,15 +77,12 @@ sano:
     common:
       # 部署drain等待Reader、队列、Bulk和任务终态安全收敛的最长秒数。
       drain-timeout-seconds: ${SANO_ES_SYNC_DRAIN_TIMEOUT_SECONDS:600}
-      write:
-        # 所有同步引擎合计允许的在途ES Bulk请求数。
-        global-bulk-concurrency: ${SANO_ES_SYNC_GLOBAL_BULK_CONCURRENCY:3}
-        # polling有等待请求时为其保留的Bulk并发数。
-        polling-reserved-concurrency: ${SANO_ES_SYNC_POLLING_RESERVED_CONCURRENCY:2}
-        # polling空闲时T+1最多可使用的Bulk并发数。
-        t-plus-one-max-concurrency: ${SANO_ES_SYNC_T_PLUS_ONE_MAX_CONCURRENCY:3}
-        # T+1排队、在途和重试批次的合计内存预算。
-        global-queue-max-bytes: ${SANO_ES_SYNC_GLOBAL_QUEUE_MAX_BYTES:128MB}
+      # 所有同步引擎合计允许的在途ES Bulk请求数。
+      global-bulk-concurrency: ${SANO_ES_SYNC_GLOBAL_BULK_CONCURRENCY:3}
+      # polling有等待请求时为其保留的Bulk并发数。
+      polling-reserved-concurrency: ${SANO_ES_SYNC_POLLING_RESERVED_CONCURRENCY:2}
+      # polling空闲时T+1最多可使用的Bulk并发数。
+      t-plus-one-max-concurrency: ${SANO_ES_SYNC_T_PLUS_ONE_MAX_CONCURRENCY:3}
 
     t-plus-one:
       # 测试主实例默认开启T+1；临时query实例由Compose覆盖为false。
@@ -100,6 +99,8 @@ sano:
       worker-count: 4
       # BlockingQueue 队列缓存容量
       queue-capacity: 10
+      # T+1排队、在途和重试批次的合计内存预算。
+      queue-max-bytes: ${SANO_ES_SYNC_T_PLUS_ONE_QUEUE_MAX_BYTES:128MB}
       # 每次Bulk文档数
       bulk-actions: 3000
       # 或每次bulk累计5MB立即发送，单位MB
@@ -120,8 +121,8 @@ sano:
       disable-replica: true
 
     polling:
-      # Polling总开关；主循环实现并完成验证前保持关闭。
-      enabled: ${SANO_ES_POLLING_ENABLED:false}
+      # 测试环境默认启用Polling；需要临时停用时可通过环境变量覆盖。
+      enabled: ${SANO_ES_POLLING_ENABLED:true}
       # 当前实例允许同时持有并运行的Polling表数量。
       max-active-tables: ${SANO_ES_POLLING_MAX_ACTIVE_TABLES:5}
       # 当前日期查询为空后再次轮询MySQL的等待时间。

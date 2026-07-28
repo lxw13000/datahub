@@ -199,11 +199,11 @@ sano:
       webhook-url: ${LARK_WEBHOOK_URL:}
   import:
     common:
-      write:
-        global-bulk-concurrency: 3
-        polling-reserved-concurrency: 2
+      global-bulk-concurrency: 3
+      polling-reserved-concurrency: 2
     t-plus-one:
       enabled: true
+      queue-max-bytes: 128MB
       cron: "0 0 3 * * ?"
     tables:
         - enabled: true
@@ -289,21 +289,18 @@ polling在`polling`配置段维护自己的轮询间隔、读取批次、Worker�
 sano:
   import:
     common:
-      write:
-        global-bulk-concurrency: 3
-        polling-reserved-concurrency: 2
-        t-plus-one-max-concurrency: 3
-        global-queue-max-bytes: 128MB
-  polling:
-    enabled: true
-    max-active-tables: 5
-    reader-per-table: 1
-    bulk-workers-per-table: 2
-    queue-capacity-batches-per-table: 4
-    max-uncommitted-sequences-per-table: 8
+      global-bulk-concurrency: 3
+      polling-reserved-concurrency: 2
+      t-plus-one-max-concurrency: 3
+    t-plus-one:
+      queue-max-bytes: 128MB
+    polling:
+      enabled: true
+      max-active-tables: 5
 ```
 
-其中`sano.import.common.write`已在版本A实现并由T+1使用；`sano.polling`及其余参数属于版本B待实现配置。
+其中共享Bulk并发参数位于 `sano.import.common`，T+1内存预算位于
+`sano.import.t-plus-one.queue-max-bytes`。
 
 说明：
 
@@ -314,12 +311,12 @@ sano:
 - polling 与 T+1 的所有 Bulk Worker 真正发送 ES 请求前，都必须从共享写入协调器获取许可证；初始最多同时执行 3 个 ES Bulk。
 - `polling-reserved-concurrency=2` 表示 polling 有请求等待时，T+1 后续最多保留 1 个在途许可证，防止夜间全量任务制造实时同步延迟；polling 空闲时 T+1 可以在 `t-plus-one-max-concurrency` 范围内借用空闲许可证。
 - 许可证不抢占已经发送的请求；T+1 在途请求完成后，下一次申请按 polling 保留额度让行。
-- `global-queue-max-bytes` 对两套引擎的内存批次增加总量保护，防止混合模式下 importer 队列与各表 polling 队列叠加导致内存失控。
+- `queue-max-bytes` 只限制T+1 Reader、队列及在途Bulk批次；Polling不接入该内存预算。
 - `max-uncommitted-sequences-per-table` 限制 `last_enqueued_sequence - last_committed_sequence`。达到上限后该表 Reader 停止查询，直到有序提交器释放窗口；该限制同时覆盖普通批次、重试批次和 `DATE_CLOSE`。
 
-线程和队列按引擎、按表隔离，ES 写入额度和总内存预算跨引擎共享。新增表只增加该模式自己的同步单元；ES 扩容后调整共享写入参数即可。polling 保留额度保证 T+1 大批量导入期间，相对实时表仍有稳定写入能力。
+线程按引擎、按表隔离，只有ES Bulk写入额度跨引擎共享；T+1内存预算不约束Polling。polling保留额度保证T+1大批量导入期间，相对实时表仍有稳定写入能力。
 
-内存预算必须遵循单一生命周期：Reader 在执行 SQL 前按目标页的保守估算预留额度，查询后按实际序列化大小校准；批次进入队列、等待许可证、执行 Bulk 或进入延迟重试期间都持续占用额度，只有该批次达到成功或“错误池已可靠落盘”的终态后才释放。预留失败时不得继续查询。T+1 也使用相同规则，避免两套引擎分别认为自己仍有可用内存。
+T+1内存预算遵循单一生命周期：Reader在执行SQL前按目标页的保守估算预留额度，查询后按实际序列化大小校准；批次进入队列、等待许可证、执行Bulk或重试期间持续占用额度，批次终态后释放。
 
 ### 4.2 每表独立有界队列
 
@@ -1121,7 +1118,7 @@ com.tsd.sano.es
 
 实现时避免将无限循环、SQL、ES Bulk、checkpoint、Lark 通知全部堆在一个类。边界建议：
 
-1. 继续由现有 `EsImportProperties.TableConfig` 绑定 `sano.import.tables`；配置加载时直接完成默认值规范化、校验，并生成T+1与polling两个只读列表，不再复制为另一套表定义模型。
+1. 继续由 `EsImportProperties` 聚合配置，并由 `SyncTableConfig` 绑定 `sano.import.tables`；配置加载时直接完成默认值规范化、校验，并生成T+1与polling两个只读列表，不再复制为另一套表定义模型。
 2. `PollingTableWorker` 负责一张表的查询节流和批次投递。
 3. `PollingBulkWriter` 只负责按 `batch.target_index` 生成 ES Bulk、错误分类与回调。
 4. `GlobalEsWritePermitManager` 位于公共同步层，为 polling 保留实时额度并限制 T+1 借用并发；不保存任何表数据或 checkpoint。

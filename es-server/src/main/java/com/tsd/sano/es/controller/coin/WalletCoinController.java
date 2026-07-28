@@ -9,7 +9,7 @@ import com.tsd.sano.es.controller.coin.vo.CoinGiftDailyStatVO;
 import com.tsd.sano.es.controller.coin.vo.CoinRecordVO;
 import com.tsd.sano.es.controller.coin.vo.WeekStatVO;
 import com.tsd.sano.es.core.result.ResultVO;
-import com.tsd.sano.es.search.WalletCoinRecordSearch;
+import com.tsd.sano.es.modules.search.service.WalletCoinRecordSearch;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.web.bind.annotation.PostMapping;

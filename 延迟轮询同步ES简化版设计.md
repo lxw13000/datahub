@@ -73,14 +73,13 @@ sano:
   import:
     common:
       drain-timeout-seconds: 600
-      write:
-        global-bulk-concurrency: 3
-        polling-reserved-concurrency: 2
-        t-plus-one-max-concurrency: 3
-        global-queue-max-bytes: 128MB
+      global-bulk-concurrency: 3
+      polling-reserved-concurrency: 2
+      t-plus-one-max-concurrency: 3
 
     t-plus-one:
       enabled: true
+      queue-max-bytes: 128MB
       # 其余配置保持现有T+1参数
 
     polling:
@@ -144,12 +143,12 @@ MySQL 主键，因此重复写入是覆盖，不会产生重复文档。
 
 ## 5. 启动与 Worker 编排
 
-Spring 应用就绪后，`PollingSyncCoordinator` 执行：
+Spring 应用就绪后，`PollingCoordinator` 执行：
 
 1. 判断当前是否为允许同步的 `all` 模式。
 2. 判断 Polling 总开关和 Polling 表集合。
 3. 检查 Checkpoint 内部索引是否已经人工初始化。
-4. 为缺少 Checkpoint 的表幂等创建唯一文档。
+4. 为缺少 Checkpoint 的表创建唯一文档；单表查询或初始化失败时保留该表等待后续扫描重试。
 5. 启动一个轻量扫描器和固定大小的表 Worker 执行器。
 6. 对持久状态为 `RUNNING`、本机尚无 Worker 且存在并发槽位的表启动 Worker。
 7. `PAUSED` 表不自动启动，等待人工恢复。
@@ -229,16 +228,25 @@ Worker 保存当前内存日期和 ID，将 Checkpoint 置为 `PAUSED`，再提�
 满足后按以下顺序执行：
 
 ```text
-创建并绑定 D+1 物理索引
-    -> 原子更新 Checkpoint 为 D+1, ID=0
-    -> Worker 内存切换到 D+1, ID=0
-    -> 异步提交 D 的统计对账
+确认D日超过关闭延迟且关闭时间之后再次查询仍为空
     -> 异步、最佳努力删除到期历史索引
-    -> 继续读取 D+1
+    -> 异步提交D日统计对账
+        -> 查询MySQL总量、最小ID和最大ID
+        -> MySQL总量为0时直接发送MYSQL_EMPTY通知，不查询ES
+        -> MySQL总量大于0时主动刷新D日物理索引
+        -> 查询ES总量、最小ID和最大ID
+        -> 发送对账通知
+    -> 创建并绑定D+1物理索引，固定最多尝试3次，两次重试前各等待5秒
+    -> 创建成功后原子更新Checkpoint为D+1, ID=0
+    -> Worker内存切换到D+1, ID=0
+    -> 继续读取D+1
 ```
 
-Checkpoint 推进是进入下一日的可靠边界。对账和历史索引删除都是推进后的旁路副作用，其提交
-或执行失败只能记录日志、发送通知，不能回退日期、暂停当前表或阻断后续同步。
+确认 D 已完成后立即提交对账和历史索引删除，不等待 D+1 索引或 Checkpoint。两者允许重复调用；
+提交或执行失败只能记录日志、发送通知，不能回退日期、暂停当前表或阻断后续同步。
+
+D+1 索引创建成功是推进 Checkpoint 的可靠前置条件。创建重试耗尽时保留
+`D + 当前lastId + PAUSED`，人工恢复后从 D 的当前游标重新确认关闭条件。
 
 ## 8. 对账
 
@@ -247,17 +255,18 @@ Checkpoint 推进是进入下一日的可靠边界。对账和历史索引删除
 每张表通过 `reconcile` 决定是否实际执行。同步流程和人工接口都可以调用统一入口；入口发现
 该表关闭对账时直接返回。
 
-对账异步比较指定日期的：
+对账先查询指定日期的 MySQL：
 
 - MySQL `COUNT(1)`
 - MySQL `MIN(id)`
 - MySQL `MAX(id)`
-- ES 文档总数
-- ES 最小文档 ID
-- ES 最大文档 ID
 
-结果一致、存在差异或执行失败，均发送 Lark 消息。对账不保存任务、不自动重试、不逐条比对、
-不自动补数据，允许异步任务因进程退出而丢失；运维可通过接口重新调用。
+- MySQL 总量为 0 时直接发送 `MYSQL_EMPTY` 通知，不刷新或查询 ES。
+- MySQL 总量大于 0 时，先刷新该日物理索引，再查询 ES 文档总数、最小 ID 和最大 ID。
+- 结果一致、存在差异、MySQL无数据或执行失败，均发送 Lark 消息。
+
+对账不保存任务、不自动重试、不逐条比对、不自动补数据，允许重复调用，也允许异步任务因
+进程退出而丢失；运维可通过接口重新调用。
 
 发现差异后，运维调用 Polling 修复接口创建指定表、指定日期的 T+1 全量任务。T+1 使用稳定
 文档 ID 覆盖写入，完成缺失数据修复。
@@ -267,7 +276,7 @@ Checkpoint 推进是进入下一日的可靠边界。对账和历史索引删除
 历史索引不使用全局每日扫描服务。
 
 - T+1 在每个日期任务完成后调用 `EsIndexManager` 的既有删除逻辑。
-- Polling 在真实跨天、Checkpoint 已推进后异步调用同一删除逻辑。
+- Polling 确认日期完成后、创建下一日索引前异步调用同一删除逻辑。
 - 只按当前表配置的 `delete-history-index/reserve-days` 计算一个到期物理索引。
 - 删除失败只记录日志，不影响同步主循环。
 

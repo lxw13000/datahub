@@ -2,12 +2,12 @@ package com.tsd.sano.es.controller;
 
 import com.tsd.sano.es.core.exception.ServiceException;
 import com.tsd.sano.es.core.result.ResultVO;
-import com.tsd.sano.es.importer.pipeline.config.EsImportProperties;
-import com.tsd.sano.es.importer.task.EsImportTask;
-import com.tsd.sano.es.polling.service.PollingSyncCoordinator;
-import com.tsd.sano.es.sync.config.EsServiceModeManager;
-import com.tsd.sano.es.sync.service.SyncDrainCoordinator;
-import com.tsd.sano.es.sync.service.SyncStatusService;
+import com.tsd.sano.es.modules.config.EsImportProperties;
+import com.tsd.sano.es.modules.tplusone.service.TPlusOneImportTask;
+import com.tsd.sano.es.modules.polling.service.PollingCoordinator;
+import com.tsd.sano.es.modules.config.EsServiceModeManager;
+import com.tsd.sano.es.modules.coordination.service.SyncDrainCoordinator;
+import com.tsd.sano.es.modules.coordination.service.SyncStatusService;
 import org.springframework.web.bind.annotation.*;
 
 /**
@@ -20,22 +20,33 @@ import org.springframework.web.bind.annotation.*;
 @RequestMapping("/internal/sync")
 public class SyncDrainController {
 
+    /** T+1与Polling统一排空协调器。 */
     private final SyncDrainCoordinator drainCoordinator;
-    private final EsImportTask importTask;
+
+    /** drain取消后恢复T+1待执行任务的业务入口。 */
+    private final TPlusOneImportTask importTask;
+
+    /** 持久状态、Worker运行态和drain结果汇总服务。 */
     private final SyncStatusService statusService;
+
+    /** Polling开关和启用表目录配置。 */
     private final EsImportProperties importProperties;
+
+    /** 同步管理接口的all/query运行模式门禁。 */
     private final EsServiceModeManager serviceModeManager;
-    private final PollingSyncCoordinator pollingCoordinator;
+
+    /** Polling表暂停、恢复和Worker控制入口。 */
+    private final PollingCoordinator pollingCoordinator;
 
     /**
      * 注入统一排空协调器和T+1取消后恢复入口
      */
     public SyncDrainController(SyncDrainCoordinator drainCoordinator,
-                               EsImportTask importTask,
+                               TPlusOneImportTask importTask,
                                SyncStatusService statusService,
                                EsImportProperties importProperties,
                                EsServiceModeManager serviceModeManager,
-                               PollingSyncCoordinator pollingCoordinator) {
+                               PollingCoordinator pollingCoordinator) {
         this.drainCoordinator = drainCoordinator;
         this.importTask = importTask;
         this.statusService = statusService;
