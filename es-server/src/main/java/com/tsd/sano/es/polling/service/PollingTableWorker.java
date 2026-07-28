@@ -37,7 +37,7 @@ public class PollingTableWorker implements Runnable {
     /**
      * 当前日期连续空查询后的固定退避秒数；达到300秒后保持该间隔
      */
-    private static final long[] EMPTY_POLL_BACKOFF_SECONDS = {10L, 30L, 60L, 300L};
+    private static final long[] EMPTY_POLL_BACKOFF_SECONDS = {5L, 10L, 30L, 60L, 300L};
 
     /**
      * 当前表配置
