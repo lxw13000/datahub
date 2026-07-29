@@ -153,6 +153,7 @@ public class PollingTableWorker implements Runnable {
     public void run() {
         String tableName = tableConfig.getTableName();
         String indexAlias = tableConfig.getIndexAlias();
+        PollingLogSummary logSummary = new PollingLogSummary(tableName, syncDate, lastId);
         log.info("===> ES-Polling worker started. table={}, date={}, lastId={}",
                 tableName, syncDate, lastId);
 
@@ -196,6 +197,12 @@ public class PollingTableWorker implements Runnable {
                             previousLastId, lastId, mysqlCostMs, esCostMs,
                             System.currentTimeMillis() - cycleStartedAt,
                             bulkSuccessful ? "SUCCESS" : "BULK_FAILED_CONTINUED");
+                    // 调用汇总日志打印
+                    logSummary.recordCycle(syncDate, batch.rows().size(),
+                            previousLastId, lastId, mysqlCostMs, esCostMs,
+                            System.currentTimeMillis() - cycleStartedAt,
+                            bulkSuccessful
+                    );
                     if (stopRequested) {
                         // drain在Bulk期间到达时等待完整重试结束，再保存已推进的查询游标。
                         stopGracefully();
@@ -209,6 +216,11 @@ public class PollingTableWorker implements Runnable {
                                 + "totalCostMs={}, result=EMPTY",
                         tableName, syncDate, previousLastId, lastId,
                         mysqlCostMs, System.currentTimeMillis() - cycleStartedAt);
+                // 调用汇总日志打印
+                logSummary.recordCycle(syncDate, 0, previousLastId, lastId,
+                        mysqlCostMs, 0L, System.currentTimeMillis() - cycleStartedAt,
+                        true
+                );
 
                 if (stopRequested) {
                     // drain在本轮SQL期间到达；停止前不再提交日期关闭，保存D日当前游标， 由恢复后的下一次查询重新确认关闭延迟和空批次条件。
@@ -249,6 +261,8 @@ public class PollingTableWorker implements Runnable {
                 // 此时才能确认D日完成，提交该日异步收尾任务，并开始D+1索引创建和checkpoint推进。
                 stage = Stage.DATE_SWITCHING;
                 LocalDate closedDate = syncDate;
+                // D日汇总日志属于旁路能力；输出成功或失败都不影响后续异步任务和日期推进。
+                logSummary.flush("DATE_CLOSE");
                 // D日已经完成，先提交两个独立异步任务；重复提交和提交失败都不影响D+1跨天。
                 try {
                     pollingIndexService.deleteHistoryIndex(tableConfig, closedDate);
@@ -313,6 +327,8 @@ public class PollingTableWorker implements Runnable {
                     tableName, syncDate, lastId, stage, error.getMessage(), error);
             pauseOnError(error);
         } finally {
+            // 输出不足五分钟的剩余窗口；汇总器内部隔离全部日志异常，不参与停止结果判断。
+            logSummary.flush("WORKER_STOP");
             if (stage != Stage.PAUSED && stage != Stage.STOPPED) {
                 stage = Stage.STOPPED;
             }

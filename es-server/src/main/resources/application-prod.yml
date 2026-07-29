@@ -32,8 +32,8 @@ logging:
     root: INFO
     com.tsd.sano.es: INFO
     com.tsd.sano.es.modules.tplusone: INFO
-    # 当前正式环境临时输出Polling每批循环日志，用于观察读取、写入耗时和游标推进。
-    com.tsd.sano.es.modules.polling: DEBUG
+    # 正式环境输出Polling五分钟汇总和关键事件；逐批耗时保留为DEBUG供临时排查。
+    com.tsd.sano.es.modules.polling: INFO
     org.springframework: INFO
     org.springframework.jdbc.core: INFO
     co.elastic.clients: WARN

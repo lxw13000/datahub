@@ -149,6 +149,7 @@
         <appender-ref ref="FILE"/>
         <queueSize>${ASYNC_QUEUE_SIZE}</queueSize>
         <discardingThreshold>0</discardingThreshold>
+        <neverBlock>true</neverBlock>
         <includeCallerData>false</includeCallerData>
     </appender>
 
@@ -156,6 +157,7 @@
         <appender-ref ref="ERROR_FILE"/>
         <queueSize>${ASYNC_QUEUE_SIZE}</queueSize>
         <discardingThreshold>0</discardingThreshold>
+        <neverBlock>true</neverBlock>
         <includeCallerData>false</includeCallerData>
     </appender>
 
@@ -177,6 +179,7 @@
         <appender-ref ref="POLLING_FILE"/>
         <queueSize>${ASYNC_QUEUE_SIZE}</queueSize>
         <discardingThreshold>0</discardingThreshold>
+        <neverBlock>true</neverBlock>
         <includeCallerData>false</includeCallerData>
     </appender>
 
@@ -184,6 +187,7 @@
         <appender-ref ref="POLLING_ERROR_FILE"/>
         <queueSize>${ASYNC_QUEUE_SIZE}</queueSize>
         <discardingThreshold>0</discardingThreshold>
+        <neverBlock>true</neverBlock>
         <includeCallerData>false</includeCallerData>
     </appender>
 
@@ -201,6 +205,13 @@
                 <pattern>${DEV_CONSOLE_PATTERN}</pattern>
                 <charset>UTF-8</charset>
             </encoder>
+        </appender>
+        <appender name="ASYNC_DEV_CONSOLE" class="ch.qos.logback.classic.AsyncAppender">
+            <appender-ref ref="DEV_CONSOLE"/>
+            <queueSize>${ASYNC_QUEUE_SIZE}</queueSize>
+            <discardingThreshold>0</discardingThreshold>
+            <neverBlock>true</neverBlock>
+            <includeCallerData>false</includeCallerData>
         </appender>
 
         <logger name="com.tsd.sano.es" level="DEBUG"/>
@@ -235,7 +246,7 @@
         </logger>
 
         <root level="INFO">
-            <appender-ref ref="DEV_CONSOLE"/>
+            <appender-ref ref="ASYNC_DEV_CONSOLE"/>
             <appender-ref ref="ASYNC_FILE"/>
             <appender-ref ref="ASYNC_ERROR_FILE"/>
         </root>
@@ -248,6 +259,13 @@
                 <pattern>${PROD_CONSOLE_PATTERN}</pattern>
                 <charset>UTF-8</charset>
             </encoder>
+        </appender>
+        <appender name="ASYNC_PROD_CONSOLE" class="ch.qos.logback.classic.AsyncAppender">
+            <appender-ref ref="PROD_CONSOLE"/>
+            <queueSize>${ASYNC_QUEUE_SIZE}</queueSize>
+            <discardingThreshold>0</discardingThreshold>
+            <neverBlock>true</neverBlock>
+            <includeCallerData>false</includeCallerData>
         </appender>
 
         <logger name="com.tsd.sano.es" level="INFO"/>
@@ -268,8 +286,8 @@
             <appender-ref ref="ASYNC_IMPORT_ERROR_FILE"/>
         </logger>
 
-        <!-- 生产环境当前临时输出Polling每批DEBUG日志；ERROR同时写入Polling错误日志。 -->
-        <logger name="com.tsd.sano.es.modules.polling" level="DEBUG" additivity="true">
+        <!-- 生产环境保留Polling汇总和关键事件；逐批耗时仅在排查时临时调整为DEBUG。 -->
+        <logger name="com.tsd.sano.es.modules.polling" level="INFO" additivity="true">
             <appender-ref ref="ASYNC_POLLING_FILE"/>
             <appender-ref ref="ASYNC_POLLING_ERROR_FILE"/>
         </logger>
@@ -283,7 +301,7 @@
         </logger>
 
         <root level="INFO">
-            <appender-ref ref="PROD_CONSOLE"/>
+            <appender-ref ref="ASYNC_PROD_CONSOLE"/>
             <appender-ref ref="ASYNC_FILE"/>
             <appender-ref ref="ASYNC_ERROR_FILE"/>
         </root>
