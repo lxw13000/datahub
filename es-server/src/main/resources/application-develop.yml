@@ -16,7 +16,7 @@ spring:
     username: ${MYSQL_UNM:admin}
     password: ${MYSQL_PWD:fl#alHGaldsj!skgnn2850allgnJsHg}
     hikari:
-      # 导入任务串行读取MySQL，生产限制连接池规模，避免误触发并发任务占用过多数据库连接。
+      # 导入任务串行读取MySQL，限制连接池规模，避免误触发并发任务占用过多数据库连接。
       maximum-pool-size: 5
       minimum-idle: 1
       connection-timeout: 30000
@@ -27,32 +27,29 @@ spring:
 logging:
   config: classpath:logback-spring.xml
   file:
-    path: ${LOG_DIR:/app/logs/es-server}
+    path: ${LOG_DIR:logs}
   level:
     root: INFO
-    com.tsd.sano.es: INFO
-    com.tsd.sano.es.modules.tplusone: INFO
-    # 当前正式环境临时输出Polling每批循环日志，用于观察读取、写入耗时和游标推进。
-    com.tsd.sano.es.modules.polling: DEBUG
+    com.tsd.sano.es: DEBUG
+    com.tsd.sano.es.modules.tplusone: DEBUG
     org.springframework: INFO
     org.springframework.jdbc.core: INFO
-    co.elastic.clients: WARN
+    co.elastic.clients: INFO
     org.elasticsearch.client: WARN
-    io.lettuce.core: WARN
+    io.lettuce.core: INFO
     com.zaxxer.hikari: INFO
 
 sano:
-  # all与query都开放查询；query只关闭T+1和未来polling同步能力。
-  server-mode: ${SANO_SERVER_MODE:all}
+  # all提供查询并启用同步；query同样提供查询，但关闭所有同步任务和流水线。
+  server-mode: query
   log:
-    # 生产环境保留周期较长，便于追踪历史同步问题。
-    max-file-size: 100MB
-    max-history: 30
-    total-size-cap: 10GB
-    async-queue-size: 8192
+    # 开发环境保留周期短，便于本地排查时快速滚动。
+    max-file-size: 50MB
+    max-history: 7
+    total-size-cap: 2GB
+    async-queue-size: 2048
   es:
-    # 宿主机直接运行时访问正式ES的9201端口；Docker部署由Compose覆盖为elasticsearch8:9200。
-    uris: ${ES_URIS:127.0.0.1:9201}
+    uris: ${ES_URIS:es.fofunlive.net}
     username: ${ES_USERNAME:elastic}
     password: ${ES_PASSWORD:es2peter}
     socket-timeout: 600000
@@ -62,16 +59,16 @@ sano:
     max-conn-per-route: 20
 
   notify:
-    # 同步任务通知总开关，生产环境建议通过环境变量显式开启。
-    enabled: ${SANO_NOTIFY_ENABLED:true}
+    # 同步任务通知总开关，开发环境默认关闭，避免本地调试误发。
+    enabled: ${SANO_NOTIFY_ENABLED:false}
     # 飞书/Lark机器人配置；关闭或webhook地址为空时跳过该通道。
     lark:
       # 飞书/Lark机器人开关。
-      enabled: ${LARK_NOTIFY_ENABLED:true}
+      enabled: ${LARK_NOTIFY_ENABLED:false}
       # 飞书/Lark机器人webhook地址。
-      webhook-url: ${LARK_WEBHOOK_URL:https://open.larksuite.com/open-apis/bot/v2/hook/b99cf729-136e-40e6-90b7-0ec5e8c61ebb}
+      webhook-url: ${LARK_WEBHOOK_URL:https://open.larksuite.com/open-apis/bot/v2/hook/c1af0ddb-8ba5-4dae-a0e2-ecc476bcc5fd}
       # 机器人签名密钥；未启用签名时留空。
-      secret: ${LARK_WEBHOOK_SECRET:WJ83ViVAM6RbDUjuxhvtah}
+      secret: ${LARK_WEBHOOK_SECRET:6MKCorKya6KxX99qxqaKwh}
   import:
     # T+1、polling及未来MQ共用的写入资源和安全排空参数。
     common:
@@ -85,26 +82,26 @@ sano:
       t-plus-one-max-concurrency: ${SANO_ES_SYNC_T_PLUS_ONE_MAX_CONCURRENCY:3}
 
     t-plus-one:
-      # 正式主实例默认开启T+1；临时query实例由Compose覆盖为false。
-      enabled: ${SANO_ES_IMPORT_T_PLUS_ONE_ENABLED:true}
-      # 每天03:00导入昨天的数据。
-      cron: "0 0 3 * * ?"
+      # T+1同步总开关；关闭后定时任务、手工导入和后台流水线均不执行。
+      enabled: false
+      # 每天02:30导入昨天的数据。
+      cron: "0 24 17 * * ?"
       # 每轮调度最大运行分钟数；到期后不再启动下一条待执行任务。
-      max-run-minutes: 480
+      max-run-minutes: 5
       # 每轮查询任务索引时最多拉取的待执行任务数。
       task-fetch-limit: 100
       # Reader每批从MySQL读取的数据量。
-      read-batch-size: 15000
+      read-batch-size: 5000
       # 并行消费Reader队列的Bulk Worker数量。
       worker-count: 4
-      # Reader到Bulk之间的批次队列容量；每个元素是一批read-batch-size数据。
-      queue-capacity: 16
+      # Reader到Bulk之间的批次队列容量。
+      queue-capacity: 10
       # T+1排队、在途和重试批次的合计内存预算。
       queue-max-bytes: ${SANO_ES_SYNC_T_PLUS_ONE_QUEUE_MAX_BYTES:128MB}
       # 单次ES Bulk请求的最大文档数。
       bulk-actions: 3000
       # 单次ES Bulk请求的目标大小上限，单位MB。
-      bulk-size-mb: 8
+      bulk-size-mb: 5
       # Bulk请求级异常的最大重试次数，不包含首次请求。
       retry-times: 3
       # Bulk重试等待时间，单位毫秒。
@@ -121,8 +118,8 @@ sano:
       disable-replica: true
 
     polling:
-      # 正式环境默认启用Polling；需要临时停用时可通过环境变量覆盖。
-      enabled: ${SANO_ES_POLLING_ENABLED:true}
+      # 开发环境默认启用Polling，仍可通过环境变量临时关闭。
+      enabled: ${SANO_ES_POLLING_ENABLED:false}
       # 当前实例允许同时持有并运行的Polling表数量。
       max-active-tables: ${SANO_ES_POLLING_MAX_ACTIVE_TABLES:5}
       # 当前日期查询为空后再次轮询MySQL的等待时间。
@@ -143,67 +140,67 @@ sano:
     # id-column用于MySQL游标和ES文档ID；dt-column/dt-column-type/where-sql决定日期查询条件。
     # delete-history-index和reserve-days控制成功导入后的历史索引清理。
     tables:
-      - enabled: true
+      - enabled: false
         index-alias: sano_wallet_coin_record
         table-name: sano_wallet_coin_record
         mapping-file: sano_wallet_coin_record.json
-        # 使用延迟轮询同步；首次没有checkpoint时从指定业务日期开始。
+        # 开发环境先使用该表验证Polling主循环，其他表继续保持T+1。
         sync-mode: polling
-        bootstrap-start-date: 2026-07-29
-        # 开启对账；对账入口按单表配置决定是否实际执行。
+        # 首次没有checkpoint时从该业务日期的最小ID开始同步。
+        bootstrap-start-date: 2026-07-24
         reconcile: true
         # 导入完成是否删除该表历史索引
         delete-history-index: true
         # 该表历史索引保留天数
-        reserve-days: 60
+        reserve-days: 30
         id-column: id
         dt-column: dt
         # dt字段类型；DATE按dt = importDate查询。
         dt-column-type: DATE
         # where-sql为空时自动使用 dt = importDate
         where-sql:
-      - enabled: true
+      - enabled: false
         index-alias: sano_wallet_diamond_record
         table-name: sano_wallet_diamond_record
         mapping-file: sano_wallet_diamond_record.json
         sync-mode: t-plus-one
-        reconcile: false
+        reconcile: true
         # 导入完成是否删除该表历史索引
         delete-history-index: true
         # 该表历史索引保留天数
-        reserve-days: 60
+        reserve-days: 30
         id-column: id
         dt-column: dt
         # dt字段类型；DATE按dt = importDate查询。
         dt-column-type: DATE
         # where-sql为空时自动使用 dt = importDate
         where-sql:
-      - enabled: true
+      - enabled: false
         index-alias: sano_wallet_lucky_diamond_record_10m
         table-name: sano_wallet_lucky_diamond_record_10m
         mapping-file: sano_wallet_lucky_diamond_record_10m.json
         sync-mode: t-plus-one
-        reconcile: false
+        reconcile: true
         # 导入完成是否删除该表历史索引
         delete-history-index: true
         # 该表历史索引保留天数
-        reserve-days: 60
+        reserve-days: 30
         id-column: id
         dt-column: dt
         # dt字段类型；DATE按dt = importDate查询。
         dt-column-type: DATE
         # where-sql为空时自动使用 dt = importDate
         where-sql:
-      - enabled: true
+      - enabled: false
         index-alias: sano_game_record
         table-name: sano_game_record
         mapping-file: sano_game_record.json
         sync-mode: t-plus-one
-        reconcile: false
+        reconcile: true
         # 导入完成是否删除该表历史索引
         delete-history-index: true
         # 该表历史索引保留天数
-        reserve-days: 60
+        reserve-days: 30
         id-column: id
         # 源表没有DATE分区字段，使用创建时间按天读取。
         dt-column: create_time

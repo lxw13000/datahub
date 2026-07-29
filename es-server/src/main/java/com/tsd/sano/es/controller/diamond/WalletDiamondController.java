@@ -1,8 +1,10 @@
 package com.tsd.sano.es.controller.diamond;
 
 import com.tsd.sano.es.controller.diamond.dto.AppDiamondRecordDTO;
+import com.tsd.sano.es.controller.diamond.dto.DiamondIncomeDistributionDTO;
 import com.tsd.sano.es.controller.diamond.dto.SatDiamond7DayDTO;
 import com.tsd.sano.es.controller.diamond.dto.SearchDiamondRecordDTO;
+import com.tsd.sano.es.controller.diamond.vo.DiamondIncomeRangeVO;
 import com.tsd.sano.es.controller.diamond.vo.DiamondRecordVO;
 import com.tsd.sano.es.core.result.ResultVO;
 import com.tsd.sano.es.modules.search.service.WalletDiamondRecordSearch;
@@ -95,6 +97,18 @@ public class WalletDiamondController {
     public ResultVO<Long> sevenDaysLiveIncome(@RequestBody SatDiamond7DayDTO dto) {
         Long count = walletDiamondRecordSearch.sevenDaysLiveIncome(dto);
         return ResultVO.success(count);
+    }
+
+    /**
+     * 按用户注册时间查询钻石收入分布。
+     *
+     * @param dto 用户注册时间范围
+     * @return 各钻石收入区间的用户数量
+     */
+    @PostMapping("/incomeDistribution")
+    public ResultVO<List<DiamondIncomeRangeVO>> incomeDistribution(
+            @RequestBody DiamondIncomeDistributionDTO dto) {
+        return ResultVO.success(walletDiamondRecordSearch.incomeDistribution(dto));
     }
 
 }

@@ -1,29 +1,41 @@
 package com.tsd.sano.es.modules.search.service;
 
+import ch.qos.logback.core.model.INamedModel;
 import co.elastic.clients.elasticsearch.ElasticsearchClient;
 import co.elastic.clients.elasticsearch._types.ElasticsearchException;
 import co.elastic.clients.elasticsearch._types.FieldValue;
 import co.elastic.clients.elasticsearch._types.SortOrder;
+import co.elastic.clients.elasticsearch._types.aggregations.LongTermsBucket;
 import co.elastic.clients.elasticsearch._types.query_dsl.BoolQuery;
 import co.elastic.clients.elasticsearch.core.CountRequest;
 import co.elastic.clients.elasticsearch.core.CountResponse;
 import co.elastic.clients.elasticsearch.core.SearchRequest;
 import co.elastic.clients.elasticsearch.core.SearchResponse;
 import co.elastic.clients.elasticsearch.core.search.Hit;
+import com.tsd.sano.es.controller.diamond.dto.DiamondIncomeDistributionDTO;
 import com.tsd.sano.es.controller.diamond.dto.SatDiamond7DayDTO;
 import com.tsd.sano.es.controller.diamond.dto.SearchDiamondRecordDTO;
+import com.tsd.sano.es.controller.diamond.vo.DiamondIncomeRangeVO;
 import com.tsd.sano.es.controller.diamond.vo.DiamondRecordVO;
+import com.tsd.sano.es.core.exception.ServiceException;
 import com.tsd.sano.es.core.util.TimeUtils;
 import com.tsd.sano.es.modules.search.constant.EsIndexAlias;
 import com.tsd.sano.es.modules.search.util.EsSearchUtil;
 import org.apache.commons.lang3.StringUtils;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.dao.DataAccessException;
+import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Service;
 
 import java.io.IOException;
+import java.time.LocalDateTime;
+import java.time.format.DateTimeFormatter;
+import java.time.format.DateTimeParseException;
 import java.util.ArrayList;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
 
 /**
  * 钻石记录检索
@@ -35,19 +47,54 @@ import java.util.List;
 @Service
 public class WalletDiamondRecordSearch {
 
+    private static final Logger log = LoggerFactory.getLogger(WalletDiamondRecordSearch.class);
 
     /**
-     * 钻石 ES 查询日志
+     * 注册时间接口使用的时间格式。
      */
-    private static final Logger log = LoggerFactory.getLogger(WalletDiamondRecordSearch.class);
+    private static final DateTimeFormatter QUERY_TIME_FORMATTER =
+            DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss");
+
+    /**
+     * 单次ES查询包含的最大用户数，限制聚合桶和请求体大小。
+     */
+    private static final int USER_BATCH_SIZE = 1_000;
+
+    /**
+     * 钻石收入记录状态。
+     */
+    private static final int INCOME_STATUS = 1;
+
+    /**
+     * 不纳入收入统计的直播时长奖励业务类型。
+     */
+    private static final int LIVE_DURATION_REWARD_BUSINESS_TYPE = 74;
+
+    /**
+     * 注册用户查询SQL。
+     *
+     * <p>查询必须只返回一列并命名为user_id；后续可在这里补充用户状态、渠道等业务条件。</p>
+     */
+    private static final String REGISTERED_USER_SQL = """
+            SELECT id AS user_id
+            FROM sano_user
+            WHERE create_time >= ?
+              AND create_time < ?
+            """;
 
     /**
      * Elasticsearch Java 客户端
      */
     private final ElasticsearchClient client;
 
-    public WalletDiamondRecordSearch(ElasticsearchClient client) {
+    /**
+     * 查询注册用户集合使用的MySQL访问组件。
+     */
+    private final JdbcTemplate jdbcTemplate;
+
+    public WalletDiamondRecordSearch(ElasticsearchClient client, JdbcTemplate jdbcTemplate) {
         this.client = client;
+        this.jdbcTemplate = jdbcTemplate;
     }
 
     /**
@@ -151,6 +198,145 @@ public class WalletDiamondRecordSearch {
                     System.currentTimeMillis() - searchStartMillis, e.getMessage(), e);
             return 0L;
         }
+    }
+
+    /**
+     * 查询注册时间范围内用户的钻石收入，并按收入总额统计人数。
+     *
+     * <p>MySQL负责筛选用户集合；ES按用户汇总收入状态的钻石记录，并排除直播时长奖励。
+     * ES没有收入记录的用户按0处理，与MySQL LEFT JOIN后的IFNULL语义一致。</p>
+     *
+     * @param dto 用户注册时间范围
+     * @return 固定顺序的钻石收入区间人数
+     */
+    public List<DiamondIncomeRangeVO> incomeDistribution(DiamondIncomeDistributionDTO dto) {
+        if (dto == null || StringUtils.isBlank(dto.getStartTime())
+                || StringUtils.isBlank(dto.getEndTime())) {
+            throw new ServiceException("用户注册开始时间和结束时间不能为空");
+        }
+
+        LocalDateTime startTime;
+        LocalDateTime endTime;
+        try {
+            startTime = LocalDateTime.parse(dto.getStartTime(), QUERY_TIME_FORMATTER);
+            endTime = LocalDateTime.parse(dto.getEndTime(), QUERY_TIME_FORMATTER);
+        } catch (DateTimeParseException error) {
+            throw new ServiceException("用户注册时间格式错误，请使用yyyy-MM-dd HH:mm:ss", error);
+        }
+        if (!endTime.isAfter(startTime)) {
+            throw new ServiceException("用户注册结束时间必须大于开始时间");
+        }
+
+        long startedAt = System.currentTimeMillis();
+        List<Long> queriedUserIds;
+        try {
+            queriedUserIds = jdbcTemplate.query(
+                    REGISTERED_USER_SQL,
+                    (resultSet, rowNum) -> resultSet.getLong("user_id"),
+                    startTime,
+                    endTime
+            );
+        } catch (DataAccessException error) {
+            throw new ServiceException("查询注册用户失败，error=" + error.getMessage(), error);
+        }
+
+        // 用户SQL后续可能增加关联查询；这里去重并过滤无效ID，避免重复统计人数。
+
+        List<Long> userIds = new ArrayList<>(queriedUserIds);
+        Map<Long, Long> incomeByUser = new LinkedHashMap<>(Math.max(16, userIds.size()));
+        for (Long userId : userIds) {
+            // 预先补0，确保没有任何收入记录的注册用户也计入0-100区间。
+            incomeByUser.put(userId, 0L);
+        }
+
+        long esStartedAt = System.currentTimeMillis();
+        try {
+            for (int fromIndex = 0; fromIndex < userIds.size(); fromIndex += USER_BATCH_SIZE) {
+                List<Long> batchUserIds = userIds.subList(
+                        fromIndex,
+                        Math.min(fromIndex + USER_BATCH_SIZE, userIds.size())
+                );
+                List<Integer> bus = new ArrayList<>();
+                if(dto.isSta74()){
+                    bus= List.of(2, 12, 23, LIVE_DURATION_REWARD_BUSINESS_TYPE);
+                }else {
+                    bus= List.of(2, 12, 23);
+                }
+                BoolQuery query = new BoolQuery.Builder()
+                        .filter(EsSearchUtil.getTermsOr("user_id", batchUserIds))
+                        .filter(EsSearchUtil.getTermsOr("business_type",bus ))
+                        .build();
+
+                SearchResponse<Void> response = client.search(search -> search
+                                .index(EsIndexAlias.SANO_WALLET_DIAMOND_RECORD)
+                                .ignoreUnavailable(true)
+                                .size(0)
+                                .query(query._toQuery())
+                                .aggregations("users", users -> users
+                                        .terms(terms -> terms
+                                                .field("user_id")
+                                                .size(batchUserIds.size()))
+                                        .aggregations("income_tokens", income -> income
+                                                .sum(sum -> sum.field("tokens")))),
+                        Void.class
+                );
+
+                List<LongTermsBucket> buckets =
+                        response.aggregations().get("users").lterms().buckets().array();
+                for (LongTermsBucket bucket : buckets) {
+                    long income = Math.round(
+                            bucket.aggregations().get("income_tokens").sum().value()
+                    );
+                    incomeByUser.put(bucket.key(), income);
+                }
+            }
+        } catch (IOException | ElasticsearchException error) {
+            log.error("ES diamond income distribution failed, userCount={}, startTime={}, endTime={}, "
+                            + "esCostMs={}, error={}",
+                    incomeByUser.size(), dto.getStartTime(), dto.getEndTime(),
+                    System.currentTimeMillis() - esStartedAt, error.getMessage(), error);
+            throw new ServiceException("查询钻石收入分布失败，error=" + error.getMessage(), error);
+        }
+
+        long[] rangeCounts = new long[8];
+        for (long income : incomeByUser.values()) {
+            if (income <= 100_000L) {
+                rangeCounts[0]++;
+            } else if (income <= 200_000L) {
+                rangeCounts[1]++;
+            } else if (income <= 500_000L) {
+                rangeCounts[2]++;
+            } else if (income <= 1_000_000L) {
+                rangeCounts[3]++;
+            } else if (income <= 2_000_000L) {
+                rangeCounts[4]++;
+            } else if (income <= 5_000_000L) {
+                rangeCounts[5]++;
+            } else if (income <= 10_000_000L) {
+                rangeCounts[6]++;
+            } else {
+                rangeCounts[7]++;
+            }
+        }
+
+        List<DiamondIncomeRangeVO> result = List.of(
+                new DiamondIncomeRangeVO("0-100", rangeCounts[0]),
+                new DiamondIncomeRangeVO("101-200", rangeCounts[1]),
+                new DiamondIncomeRangeVO("201-500", rangeCounts[2]),
+                new DiamondIncomeRangeVO("501-1000", rangeCounts[3]),
+                new DiamondIncomeRangeVO("1001-2000", rangeCounts[4]),
+                new DiamondIncomeRangeVO("2001-5000", rangeCounts[5]),
+                new DiamondIncomeRangeVO("5001-10000", rangeCounts[6]),
+                new DiamondIncomeRangeVO("10000+", rangeCounts[7])
+        );
+        long completedAt = System.currentTimeMillis();
+        log.info("===> ES-Search diamond income distribution. startTime={}, endTime={}, userCount={}, "
+                        + "batchCount={}, mysqlCostMs={}, esCostMs={}, totalCostMs={}, ranges={}",
+                dto.getStartTime(), dto.getEndTime(), incomeByUser.size(),
+                (incomeByUser.size() + USER_BATCH_SIZE - 1) / USER_BATCH_SIZE,
+                esStartedAt - startedAt, completedAt - esStartedAt,
+                completedAt - startedAt, result);
+        return result;
     }
 
     /**

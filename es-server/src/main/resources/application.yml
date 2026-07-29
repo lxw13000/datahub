@@ -5,7 +5,7 @@ spring:
   application:
     name: es-server
   profiles:
-    active: dev
+    active: develop
   # 开启虚拟线程
   threads:
     virtual:

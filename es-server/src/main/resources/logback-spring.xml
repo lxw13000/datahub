@@ -195,7 +195,7 @@
     </appender>
 
     <!-- ===================== 开发/测试环境 ===================== -->
-    <springProfile name="dev | test">
+    <springProfile name="dev | test | develop">
         <appender name="DEV_CONSOLE" class="ch.qos.logback.core.ConsoleAppender">
             <encoder>
                 <pattern>${DEV_CONSOLE_PATTERN}</pattern>
@@ -268,8 +268,8 @@
             <appender-ref ref="ASYNC_IMPORT_ERROR_FILE"/>
         </logger>
 
-        <!-- 生产Polling日志独立保存；ERROR同时写入应用Polling错误日志。 -->
-        <logger name="com.tsd.sano.es.modules.polling" level="INFO" additivity="true">
+        <!-- 生产环境当前临时输出Polling每批DEBUG日志；ERROR同时写入Polling错误日志。 -->
+        <logger name="com.tsd.sano.es.modules.polling" level="DEBUG" additivity="true">
             <appender-ref ref="ASYNC_POLLING_FILE"/>
             <appender-ref ref="ASYNC_POLLING_ERROR_FILE"/>
         </logger>
