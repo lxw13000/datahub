@@ -18,8 +18,8 @@ services:
         max-size: "100m"
         max-file: "5"
     cpus: "2.0"
-    mem_limit: 2g
-    mem_reservation: 1g
+    mem_limit: 1536m
+    mem_reservation: 768m
     environment:
       TZ: Asia/Shanghai
       SPRING_PROFILES_ACTIVE: test
@@ -29,7 +29,7 @@ services:
       SANO_ES_IMPORT_T_PLUS_ONE_ENABLED: ${SANO_ES_IMPORT_T_PLUS_ONE_ENABLED:-true}
       # all实例默认启用Polling；部署时可通过同名环境变量临时关闭。
       SANO_ES_POLLING_ENABLED: ${SANO_ES_POLLING_ENABLED:-true}
-      JAVA_OPTS: "-Xms1g -Xmx1536m -XX:+UseG1GC -XX:MaxGCPauseMillis=200 -XX:+HeapDumpOnOutOfMemoryError -XX:HeapDumpPath=/app/logs/es-server"
+      JAVA_OPTS: "-Xms512m -Xmx1g -XX:+UseG1GC -XX:MaxGCPauseMillis=200 -XX:+HeapDumpOnOutOfMemoryError -XX:HeapDumpPath=/app/logs/es-server"
       MYSQL_UNM: ${MYSQL_UNM:-root}
       MYSQL_PWD: ${MYSQL_PWD:-SADFH28!asoaignljASjacoOs}
       ES_URIS: ${ES_URIS:-elasticsearch8-test:9200}
@@ -53,8 +53,8 @@ services:
         max-size: "100m"
         max-file: "3"
     cpus: "1.0"
-    mem_limit: 1g
-    mem_reservation: 512m
+    mem_limit: 768m
+    mem_reservation: 384m
     environment:
       TZ: Asia/Shanghai
       SPRING_PROFILES_ACTIVE: test
@@ -63,7 +63,7 @@ services:
       SANO_SERVER_MODE: query
       SANO_ES_IMPORT_T_PLUS_ONE_ENABLED: "false"
       SANO_ES_POLLING_ENABLED: "false"
-      JAVA_OPTS: "-Xms512m -Xmx768m -XX:+UseG1GC -XX:MaxGCPauseMillis=200"
+      JAVA_OPTS: "-Xms256m -Xmx512m -XX:+UseG1GC -XX:MaxGCPauseMillis=200"
       MYSQL_UNM: ${MYSQL_UNM:-root}
       MYSQL_PWD: ${MYSQL_PWD:-SADFH28!asoaignljASjacoOs}
       ES_URIS: ${ES_URIS:-elasticsearch8-test:9200}
