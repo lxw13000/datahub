@@ -78,7 +78,7 @@ sano:
       # 部署drain等待Reader、队列、Bulk和任务终态安全收敛的最长秒数。
       drain-timeout-seconds: ${SANO_ES_SYNC_DRAIN_TIMEOUT_SECONDS:600}
       # 所有同步引擎合计允许的在途ES Bulk请求数。
-      global-bulk-concurrency: ${SANO_ES_SYNC_GLOBAL_BULK_CONCURRENCY:3}
+      global-bulk-concurrency: ${SANO_ES_SYNC_GLOBAL_BULK_CONCURRENCY:5}
       # polling有等待请求时为其保留的Bulk并发数。
       polling-reserved-concurrency: ${SANO_ES_SYNC_POLLING_RESERVED_CONCURRENCY:2}
       # polling空闲时T+1最多可使用的Bulk并发数。
@@ -88,7 +88,7 @@ sano:
       # 正式主实例默认开启T+1；临时query实例由Compose覆盖为false。
       enabled: ${SANO_ES_IMPORT_T_PLUS_ONE_ENABLED:true}
       # 每天03:00导入昨天的数据。
-      cron: "0 0 3 * * ?"
+      cron: "0 30 1 * * ?"
       # 每轮调度最大运行分钟数；到期后不再启动下一条待执行任务。
       max-run-minutes: 480
       # 每轮查询任务索引时最多拉取的待执行任务数。
@@ -122,7 +122,7 @@ sano:
 
     polling:
       # 正式环境默认启用Polling；需要临时停用时可通过环境变量覆盖。
-      enabled: ${SANO_ES_POLLING_ENABLED:true}
+      enabled: ${SANO_ES_POLLING_ENABLED:false}
       # 当前实例允许同时持有并运行的Polling表数量。
       max-active-tables: ${SANO_ES_POLLING_MAX_ACTIVE_TABLES:5}
       # 当前日期查询为空后再次轮询MySQL的等待时间。
@@ -148,7 +148,7 @@ sano:
         table-name: sano_wallet_coin_record
         mapping-file: sano_wallet_coin_record.json
         # 使用延迟轮询同步；首次没有checkpoint时从指定业务日期开始。
-        sync-mode: polling
+        sync-mode: t_plus_one
         bootstrap-start-date: 2026-07-29
         # 开启对账；对账入口按单表配置决定是否实际执行。
         reconcile: true
@@ -167,7 +167,7 @@ sano:
         table-name: sano_wallet_diamond_record
         mapping-file: sano_wallet_diamond_record.json
         sync-mode: t-plus-one
-        reconcile: false
+        reconcile: true
         # 导入完成是否删除该表历史索引
         delete-history-index: true
         # 该表历史索引保留天数
@@ -183,7 +183,7 @@ sano:
         table-name: sano_wallet_lucky_diamond_record_10m
         mapping-file: sano_wallet_lucky_diamond_record_10m.json
         sync-mode: t-plus-one
-        reconcile: false
+        reconcile: true
         # 导入完成是否删除该表历史索引
         delete-history-index: true
         # 该表历史索引保留天数
@@ -199,7 +199,7 @@ sano:
         table-name: sano_game_record
         mapping-file: sano_game_record.json
         sync-mode: t-plus-one
-        reconcile: false
+        reconcile: true
         # 导入完成是否删除该表历史索引
         delete-history-index: true
         # 该表历史索引保留天数

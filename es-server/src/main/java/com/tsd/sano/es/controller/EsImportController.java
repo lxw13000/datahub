@@ -10,7 +10,7 @@ import com.tsd.sano.es.modules.polling.service.PollingIndexService;
 import com.tsd.sano.es.modules.reconcile.service.ReconcileStatisticsService;
 import com.tsd.sano.es.modules.tplusone.model.SanoImportTask;
 import com.tsd.sano.es.modules.tplusone.service.SanoImportTaskService;
-import com.tsd.sano.es.modules.tplusone.service.TPlusOneImportTask;
+import com.tsd.sano.es.modules.tplusone.task.TPlusOneImportTask;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.apache.commons.lang3.StringUtils;
