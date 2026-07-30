@@ -104,21 +104,21 @@ public class TPlusOneJdbcReader {
         String drainOperationId = context.tryBeginReadBatch();
         if (drainOperationId != null) {
             context.markDrainPartial(drainOperationId);
-            log.warn("===> ES-Import count skipped for drain. operationId={}, table={}",
+            log.warn("===> ES-TPlusOne count skipped for drain. operationId={}, table={}",
                     drainOperationId, tableName);
             return 0L;
         }
 
         // 表名已做白名单校验，查询条件参数仍通过JDBC占位符传入。
         String sql = "SELECT COUNT(1) FROM " + tableName + " WHERE " + condition.whereSql();
-        log.info("===> ES-Import count sql summary. table={}, sql={}, params={}",
+        log.info("===> ES-TPlusOne count sql summary. table={}, sql={}, params={}",
                 tableName, sql, condition.params());
 
         Long total;
         try {
             total = jdbcTemplate.queryForObject(sql, Long.class, condition.params().toArray());
         } catch (Exception e) {
-            log.error("===> ES-Import count sql failed. table={}, sql={}, params={}, error={}",
+            log.error("===> ES-TPlusOne count sql failed. table={}, sql={}, params={}, error={}",
                     tableName, sql, condition.params(), e.getMessage(), e);
             throw e;
         } finally {
@@ -131,10 +131,10 @@ public class TPlusOneJdbcReader {
         if (drainOperationId != null) {
             // COUNT先取得查询边界时允许当前SQL完成，但不得继续创建索引或读取数据页。
             context.markDrainPartial(drainOperationId);
-            log.warn("===> ES-Import count finished at drain boundary. operationId={}, table={}, total={}",
+            log.warn("===> ES-TPlusOne count finished at drain boundary. operationId={}, table={}, total={}",
                     drainOperationId, tableName, totalCount);
         }
-        log.info("===> ES-Import count datasource. table={}, total={}", tableName, totalCount);
+        log.info("===> ES-TPlusOne count datasource. table={}, total={}", tableName, totalCount);
         return totalCount;
     }
 
@@ -155,7 +155,7 @@ public class TPlusOneJdbcReader {
                 if (drainOperationId != null) {
                     context.markDrainPartial(drainOperationId);
                     offerEndSignals(context);
-                    log.warn("===> ES-Import reader stopped for drain. operationId={}, table={}, read={}, lastId={}",
+                    log.warn("===> ES-TPlusOne reader stopped for drain. operationId={}, table={}, read={}, lastId={}",
                             drainOperationId, config.getTableName(), context.getStatistics().getRead().get(), lastId);
                     return;
                 }
@@ -163,7 +163,7 @@ public class TPlusOneJdbcReader {
                     // 到达deadline后不再发起新的MySQL查询，已入队数据交给Bulk继续写完。
                     context.markTimeoutPartial();
                     offerEndSignals(context);
-                    log.warn("===> ES-Import reader reach deadline, stop mysql query. table={}, read={}, lastId={}",
+                    log.warn("===> ES-TPlusOne reader reach deadline, stop mysql query. table={}, read={}, lastId={}",
                             config.getTableName(), context.getStatistics().getRead().get(), lastId);
                     return;
                 }
@@ -179,7 +179,7 @@ public class TPlusOneJdbcReader {
                     if (drainOperationId != null) {
                         context.markDrainPartial(drainOperationId);
                         offerEndSignals(context);
-                        log.warn("===> ES-Import reader stopped for drain after memory wait. operationId={}, table={}, read={}, lastId={}",
+                        log.warn("===> ES-TPlusOne reader stopped for drain after memory wait. operationId={}, table={}, read={}, lastId={}",
                                 drainOperationId, config.getTableName(), context.getStatistics().getRead().get(), lastId);
                         return;
                     }
@@ -195,7 +195,7 @@ public class TPlusOneJdbcReader {
                         if (rows.isEmpty()) {
                             // 没有更多数据时通知所有Bulk工作线程退出，查询预留额度由finally归还。
                             offerEndSignals(context);
-                            log.info("===> ES-Import read finished. table={}, read={}",
+                            log.info("===> ES-TPlusOne read finished. table={}, read={}",
                                     config.getTableName(), context.getStatistics().getRead().get());
                             return;
                         }
@@ -210,7 +210,7 @@ public class TPlusOneJdbcReader {
                         ImportBatch batch = context.createBatch(rows, lastId, reservation);
                         reservationTransferred = true;
                         offerBatch(context, batch);
-                        log.info("===> ES-Import read batch. table={}, sequence={}, size={}, reservedBytes={}, lastId={}, read={}/{}",
+                        log.info("===> ES-TPlusOne read batch. table={}, sequence={}, size={}, reservedBytes={}, lastId={}, read={}/{}",
                                 config.getTableName(),
                                 batch.sequence(),
                                 rows.size(),
@@ -222,7 +222,7 @@ public class TPlusOneJdbcReader {
                         if (rows.size() < pageSize) {
                             // 当前页不足一整页，说明已读到最后一页，避免再次查询空页。
                             offerEndSignals(context);
-                            log.info("===> ES-Import read finished. table={}, read={}",
+                            log.info("===> ES-TPlusOne read finished. table={}, read={}",
                                     config.getTableName(), context.getStatistics().getRead().get());
                             return;
                         }
@@ -280,11 +280,11 @@ public class TPlusOneJdbcReader {
             List<Map<String, Object>> rows = jdbcTemplate.queryForList(sql, params.toArray());
             long costMs = System.currentTimeMillis() - startTime;
 
-            log.info("===> ES-Import mysql page query. table={}, size={}, lastId={}, pageSize={}, costMs={}",
+            log.info("===> ES-TPlusOne mysql page query. table={}, size={}, lastId={}, pageSize={}, costMs={}",
                     tableName, rows.size(), lastId, pageSize, costMs);
             return rows;
         } catch (Exception e) {
-            log.error("===> ES-Import read sql failed. table={}, sql={}, params={}, lastId={}, pageSize={}, error={}",
+            log.error("===> ES-TPlusOne read sql failed. table={}, sql={}, params={}, lastId={}, pageSize={}, error={}",
                     tableName, sql, params, lastId, pageSize, e.getMessage(), e);
             throw e;
         }

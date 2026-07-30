@@ -84,11 +84,6 @@ public class TPlusOneConfig {
     private double maxFailureRate = 0.001D;
 
     /**
-     * 是否开启T+1导入监控日志。
-     */
-    private boolean enableMonitor = true;
-
-    /**
      * T+1建索引导入期间是否关闭ES refresh。
      */
     private boolean disableRefresh = true;

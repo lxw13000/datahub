@@ -19,7 +19,6 @@ import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
 
 import java.io.IOException;
-import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.*;
@@ -94,9 +93,14 @@ public class TPlusOneBulkWriter {
     public void importFromQueue(ImportContext context) {
         EsImportProperties properties = requireProperties(context);
         int workerCount = properties.getTPlusOne().getWorkerCount();
+        AtomicInteger workerIndex = new AtomicInteger(1);
 
         // Java 21中ExecutorService支持try-with-resources，导入结束后自动关闭工作线程池。
-        try (ExecutorService executor = Executors.newFixedThreadPool(workerCount, new BulkThreadFactory())) {
+        try (ExecutorService executor = Executors.newFixedThreadPool(workerCount, runnable -> {
+            Thread thread = new Thread(runnable);
+            thread.setName("es-bulk-importer-" + workerIndex.getAndIncrement());
+            return thread;
+        })) {
             CompletionService<Void> completions = new ExecutorCompletionService<>(executor);
 
             for (int i = 0; i < workerCount; i++) {
@@ -109,7 +113,19 @@ public class TPlusOneBulkWriter {
 
             // 不再接收新任务，等待已提交的Bulk工作线程结束。
             executor.shutdown();
-            waitWorkersDone(context, executor, completions, workerCount);
+            try {
+                for (int i = 0; i < workerCount; i++) {
+                    // 按实际完成顺序观察结果；任一Worker失败后立即中断其余Worker，避免顺序get永久等待。
+                    completions.take().get();
+                }
+                if (!executor.awaitTermination(1, TimeUnit.MINUTES)) {
+                    log.warn("===> ES-TPlusOne bulk worker pool still terminating");
+                }
+            } catch (Exception e) {
+                context.abort(e);
+                executor.shutdownNow();
+                throw new ServiceException("ES bulk importer worker failed, error=" + e.getMessage(), e);
+            }
         }
     }
 
@@ -119,7 +135,13 @@ public class TPlusOneBulkWriter {
     private void consumeQueue(ImportContext context) {
         try {
             while (true) {
-                ImportBatch batch = takeBatch(context);
+                ImportBatch batch;
+                try {
+                    batch = context.getQueue().take();
+                } catch (InterruptedException e) {
+                    Thread.currentThread().interrupt();
+                    throw new ServiceException("ES bulk importer interrupted while waiting queue", e);
+                }
                 if (batch.isEndSignal()) {
                     // 每个Worker收到一个独立结束信号后正常退出。
                     return;
@@ -129,7 +151,7 @@ public class TPlusOneBulkWriter {
                 context.completeBatch(batch, checkpointSafe);
                 if (!checkpointSafe) {
                     // item级失败仍按现有容差策略继续导入，但不能越过本批次保存续跑断点。
-                    log.warn("===> ES-Import checkpoint blocked by unsafe batch. sequence={}, lastId={}, size={}",
+                    log.warn("===> ES-TPlusOne checkpoint blocked by unsafe batch. sequence={}, lastId={}, size={}",
                             batch.sequence(), batch.lastId(), batch.rows().size());
                 }
             }
@@ -149,26 +171,24 @@ public class TPlusOneBulkWriter {
         EsImportProperties properties = requireProperties(context);
         int bulkActions = Math.max(1, properties.getTPlusOne().getBulkActions());
         int maxBulkBytes = Math.max(1, properties.getTPlusOne().getBulkSizeMb()) * MB;
-        int actionLimit = estimateActionLimit(rows, bulkActions, maxBulkBytes);
-
-        // chunk保存本次待发送的Bulk子批次，按配置数量和估算体积计算后的数量阈值切分。
-        List<Map<String, Object>> chunk = new ArrayList<>(Math.min(rows.size(), actionLimit));
-        boolean checkpointSafe = true;
-
-        for (Map<String, Object> row : rows) {
-            if (chunk.size() >= actionLimit) {
-                // 达到阈值立即发送，避免单次请求过大影响ES稳定性。
-                if (!sendWithRetry(context, chunk)) {
-                    checkpointSafe = false;
-                }
-                chunk = new ArrayList<>(Math.min(rows.size(), actionLimit));
-            }
-
-            chunk.add(row);
+        int actionLimit;
+        // 只抽样首条记录，避免在Bulk发送前重复遍历和序列化整批数据。
+        int estimatedDocBytes;
+        try {
+            estimatedDocBytes = objectMapper.writeValueAsBytes(rows.getFirst()).length;
+        } catch (Exception e) {
+            // 估算失败不影响导入，使用保守默认值继续切分。
+            estimatedDocBytes = DEFAULT_DOC_BYTES;
         }
+        estimatedDocBytes = Math.max(1, (int) Math.ceil(estimatedDocBytes * DOC_SIZE_SAFE_FACTOR));
+        int sizeLimitActions = Math.max(1, maxBulkBytes / estimatedDocBytes);
+        actionLimit = Math.min(bulkActions, sizeLimitActions);
 
-        if (!chunk.isEmpty()) {
-            // 发送最后不足阈值的一批数据。
+        boolean checkpointSafe = true;
+        for (int fromIndex = 0; fromIndex < rows.size(); fromIndex += actionLimit) {
+            int toIndex = Math.min(fromIndex + actionLimit, rows.size());
+            // subList只创建原批次的轻量级视图，发送期间不修改原集合，避免再次遍历和复制数据引用。
+            List<Map<String, Object>> chunk = rows.subList(fromIndex, toIndex);
             if (!sendWithRetry(context, chunk)) {
                 checkpointSafe = false;
             }
@@ -185,58 +205,24 @@ public class TPlusOneBulkWriter {
      */
     private boolean sendWithRetry(ImportContext context, List<Map<String, Object>> rows) {
         EsImportProperties properties = requireProperties(context);
-        int maxAttempt = Math.max(0, properties.getTPlusOne().getRetryTimes()) + 1;
-
-        for (int attempt = 1; attempt <= maxAttempt; attempt++) {
-            try {
-                long startTime = System.currentTimeMillis();
-                BulkResponse response;
-                // 许可证只覆盖真实ES请求时间，响应统计和重试等待均不占用全局并发额度。
-                try (GlobalEsWritePermitManager.Permit ignored =
-                             writePermitManager.acquire(TableSyncMode.T_PLUS_ONE)) {
-                    response = sendBulk(context, rows);
-                }
-                long costMs = System.currentTimeMillis() - startTime;
-                return handleResponse(context, response, rows.size(), costMs);
-            } catch (IOException e) {
-                if (attempt >= maxAttempt) {
-                    // 请求级失败说明本批数据没有可靠写入，继续执行会得到不完整索引。
-                    context.getStatistics().getFailed().addAndGet(rows.size());
-                    logRequestFailedIds(context, rows, e.getMessage());
-                    throw new ServiceException("ES bulk import failed after retry, size=" + rows.size()
-                            + ", error=" + e.getMessage(), e);
-                }
-
-                log.warn("===> ES-Import bulk request failed, retry later. attempt={}/{}, size={}, error={}",
-                        attempt, maxAttempt, rows.size(), e.getMessage());
-                // 简单固定间隔重试，避免ES短暂抖动直接导致整次导入失败。
-                sleepQuietly(properties.getTPlusOne().getRetryInterval());
-            }
-        }
-        return false;
-    }
-
-    /**
-     * 构建并发送Bulk请求。
-     *
-     * <p>单条数据缺少文档ID时只记录失败并跳过，不影响同批次其他数据写入。</p>
-     */
-    private BulkResponse sendBulk(ImportContext context, List<Map<String, Object>> rows) throws IOException {
         TPlusOneImportConfig config = requireConfig(context);
         String indexName = requireText(config.getIndexName(), "indexName");
         String idColumn = requireText(config.getIdColumn(), "idColumn");
+        int maxAttempt = Math.max(0, properties.getTPlusOne().getRetryTimes()) + 1;
 
+        // 请求在重试前只构建一次；BulkRequest构建完成后不可变，可使用相同文档ID安全重试。
         BulkRequest.Builder builder = new BulkRequest.Builder()
                 .refresh(Refresh.False);
         int validCount = 0;
-
         for (Map<String, Object> row : rows) {
-            // 文档ID必须稳定，保证重跑同一批数据时ES写入幂等。
+            // 文档ID必须稳定，保证重跑或请求重试时ES写入幂等。
             String documentId = extractDocumentId(row, idColumn);
             if (StringUtils.isBlank(documentId)) {
                 context.getStatistics().getFailed().incrementAndGet();
-                logImportFailedId(context, null, "blank_document_id", "document id is blank, idColumn=" + idColumn);
-                log.warn("===> ES-Import skip row because document id is blank. idColumn={}, row={}", idColumn, row);
+                logImportFailedId(context, null, "blank_document_id",
+                        "document id is blank, idColumn=" + idColumn);
+                log.warn("===> ES-TPlusOne skip row because document id is blank. idColumn={}, row={}",
+                        idColumn, row);
                 continue;
             }
             builder.operations(operation -> operation.index(index -> index
@@ -249,11 +235,49 @@ public class TPlusOneBulkWriter {
 
         if (validCount == 0) {
             // 整个子批次都无有效文档时跳过请求，避免发送空Bulk。
-            log.warn("===> ES-Import skip bulk because no valid documents. rows={}", rows.size());
-            return null;
+            log.warn("===> ES-TPlusOne skip bulk because no valid documents. rows={}", rows.size());
+            return false;
         }
+        BulkRequest request = builder.build();
 
-        return client.bulk(builder.build());
+        for (int attempt = 1; attempt <= maxAttempt; attempt++) {
+            try {
+                long startTime = System.currentTimeMillis();
+                BulkResponse response;
+                // 许可证只覆盖真实ES请求时间，响应统计和重试等待均不占用全局并发额度。
+                try (GlobalEsWritePermitManager.Permit ignored =
+                             writePermitManager.acquire(TableSyncMode.T_PLUS_ONE)) {
+                    response = client.bulk(request);
+                }
+                long costMs = System.currentTimeMillis() - startTime;
+                return handleResponse(context, response, rows.size(), costMs);
+            } catch (IOException e) {
+                if (attempt >= maxAttempt) {
+                    // 空ID已在构建阶段单独统计；这里只统计并记录实际进入请求但最终发送失败的文档。
+                    context.getStatistics().getFailed().addAndGet(validCount);
+                    for (Map<String, Object> row : rows) {
+                        String documentId = extractDocumentId(row, idColumn);
+                        if (StringUtils.isBlank(documentId)) {
+                            continue;
+                        }
+                        logImportFailedId(context, documentId, "bulk_request_failed", e.getMessage());
+                    }
+                    throw new ServiceException("ES bulk import failed after retry, size=" + validCount
+                            + ", error=" + e.getMessage(), e);
+                }
+
+                log.warn("===> ES-TPlusOne bulk request failed, retry later. attempt={}/{}, size={}, error={}",
+                        attempt, maxAttempt, rows.size(), e.getMessage());
+                // 简单固定间隔重试，避免ES短暂抖动直接导致整次导入失败。
+                try {
+                    Thread.sleep(Math.max(0, properties.getTPlusOne().getRetryInterval()));
+                } catch (InterruptedException interruptedException) {
+                    Thread.currentThread().interrupt();
+                    throw new ServiceException("ES bulk retry interrupted", interruptedException);
+                }
+            }
+        }
+        return false;
     }
 
     /**
@@ -279,16 +303,30 @@ public class TPlusOneBulkWriter {
 
         if (response.errors()) {
             // 只打印有限条错误明细，完整失败数量进入统计对象。
-            logBulkErrors(context, response);
+            int errorLogCount = 0;
+            for (BulkResponseItem item : response.items()) {
+                if (item.error() == null) {
+                    continue;
+                }
+
+                logImportFailedId(context, item.id(), String.valueOf(item.status()), item.error().reason());
+                log.warn("===> ES-TPlusOne bulk item failed. id={}, status={}, reason={}",
+                        item.id(), item.status(), item.error().reason());
+                errorLogCount++;
+                if (errorLogCount >= MAX_ERROR_LOG_COUNT) {
+                    // 失败过多时截断普通日志，防止单次导入刷爆日志文件。
+                    break;
+                }
+            }
         }
 
         if (costMs >= SLOW_BULK_WARN_MS) {
-            log.warn("===> ES-Import slow bulk. requestSize={}, success={}, failed={}, costMs={}",
+            log.warn("===> ES-TPlusOne slow bulk. requestSize={}, success={}, failed={}, costMs={}",
                     requestSize, success, failed, costMs);
         }
 
         if (bulkCount <= 5 || bulkCount % BULK_PROGRESS_LOG_INTERVAL == 0 || failed > 0) {
-            log.info("===> ES-Import bulk progress. bulkCount={}, requestSize={}, success={}, failed={}, costMs={}, totalSuccess={}, totalFailed={}",
+            log.info("===> ES-TPlusOne bulk progress. bulkCount={}, requestSize={}, success={}, failed={}, costMs={}, totalSuccess={}, totalFailed={}",
                     bulkCount,
                     requestSize,
                     success,
@@ -303,95 +341,19 @@ public class TPlusOneBulkWriter {
     }
 
     /**
-     * 打印Bulk item级失败明细。
-     */
-    private void logBulkErrors(ImportContext context, BulkResponse response) {
-        int count = 0;
-        for (BulkResponseItem item : response.items()) {
-            if (item.error() == null) {
-                continue;
-            }
-
-            logImportFailedId(context, item.id(), String.valueOf(item.status()), item.error().reason());
-
-            log.warn("===> ES-Import bulk item failed. id={}, status={}, reason={}",
-                    item.id(), item.status(), item.error().reason());
-            count++;
-            if (count >= MAX_ERROR_LOG_COUNT) {
-                // 失败过多时截断日志，防止单次导入刷爆日志文件。
-                break;
-            }
-        }
-    }
-
-    /**
-     * 记录请求级失败涉及的全部文档ID。
-     */
-    private void logRequestFailedIds(ImportContext context, List<Map<String, Object>> rows, String reason) {
-        TPlusOneImportConfig config = requireConfig(context);
-        String idColumn = requireText(config.getIdColumn(), "idColumn");
-
-        for (Map<String, Object> row : rows) {
-            String documentId = extractDocumentId(row, idColumn);
-            logImportFailedId(context, documentId, "bulk_request_failed", reason);
-        }
-    }
-
-    /**
      * 输出导入失败ID专项日志。
      *
      * <p>格式突出表名和ID，便于直接回查数据源。</p>
      */
     private void logImportFailedId(ImportContext context, String documentId, String status, String reason) {
         TPlusOneImportConfig config = requireConfig(context);
-        importErrorLog.error("===> ES-Import failed document. table={} id:{} index={} alias={} status={} reason={}",
+        importErrorLog.error("===> ES-TPlusOne failed document. table={} id:{} index={} alias={} status={} reason={}",
                 config.getTableName(),
                 StringUtils.defaultIfBlank(documentId, "UNKNOWN"),
                 config.getIndexName(),
                 config.getIndexAlias(),
                 status,
                 reason);
-    }
-
-    /**
-     * 从共享队列中获取一批待读取数据。
-     */
-    private ImportBatch takeBatch(ImportContext context) {
-        try {
-            return context.getQueue().take();
-        } catch (InterruptedException e) {
-            Thread.currentThread().interrupt();
-            throw new ServiceException("ES bulk importer interrupted while waiting queue", e);
-        }
-    }
-
-    /**
-     * 估算单条文档序列化后的字节数。
-     */
-    private int estimateDocBytes(Map<String, Object> row) {
-        try {
-            return objectMapper.writeValueAsBytes(row).length;
-        } catch (Exception e) {
-            // 估算失败不影响导入，使用保守默认值继续切分。
-            return DEFAULT_DOC_BYTES;
-        }
-    }
-
-    /**
-     * 根据首条文档估算本批次允许的最大文档数。
-     *
-     * <p>当前同步表字段结构稳定，逐条估算会造成额外JSON序列化开销；按首条估算并加安全系数，
-     * 能在稳定性和性能之间取得更合适的平衡。</p>
-     */
-    private int estimateActionLimit(List<Map<String, Object>> rows, int bulkActions, int maxBulkBytes) {
-        if (rows.isEmpty()) {
-            return bulkActions;
-        }
-
-        // 只抽样首条记录，避免在Bulk发送前重复遍历和序列化整批数据。
-        int estimatedDocBytes = Math.max(1, (int) Math.ceil(estimateDocBytes(rows.getFirst()) * DOC_SIZE_SAFE_FACTOR));
-        int sizeLimitActions = Math.max(1, maxBulkBytes / estimatedDocBytes);
-        return Math.max(1, Math.min(bulkActions, sizeLimitActions));
     }
 
     /**
@@ -407,40 +369,6 @@ public class TPlusOneBulkWriter {
 
         // 缺少稳定业务ID时不能随机生成，否则重跑会产生重复文档。
         return null;
-    }
-
-    /**
-     * 等待所有Bulk工作线程结束。
-     */
-    private void waitWorkersDone(ImportContext context,
-                                 ExecutorService executor,
-                                 CompletionService<Void> completions,
-                                 int workerCount) {
-        try {
-            for (int i = 0; i < workerCount; i++) {
-                // 按实际完成顺序观察结果；任一worker失败后立即中断其余worker，避免顺序get永久等待。
-                completions.take().get();
-            }
-            if (!executor.awaitTermination(1, TimeUnit.MINUTES)) {
-                log.warn("===> ES-Import bulk worker pool still terminating");
-            }
-        } catch (Exception e) {
-            context.abort(e);
-            executor.shutdownNow();
-            throw new ServiceException("ES bulk importer worker failed, error=" + e.getMessage(), e);
-        }
-    }
-
-    /**
-     * 重试间隔等待。
-     */
-    private void sleepQuietly(long millis) {
-        try {
-            Thread.sleep(Math.max(0, millis));
-        } catch (InterruptedException e) {
-            Thread.currentThread().interrupt();
-            throw new ServiceException("ES bulk retry interrupted", e);
-        }
     }
 
     /**
@@ -473,24 +401,4 @@ public class TPlusOneBulkWriter {
         return value.trim();
     }
 
-    /**
-     * Bulk工作线程工厂，用于设置可识别的线程名。
-     */
-    private static class BulkThreadFactory implements ThreadFactory {
-
-        /**
-         * 线程序号，便于日志中定位具体工作线程。
-         */
-        private final AtomicInteger index = new AtomicInteger(1);
-
-        /**
-         * 创建Bulk工作线程。
-         */
-        @Override
-        public Thread newThread(Runnable runnable) {
-            Thread thread = new Thread(runnable);
-            thread.setName("es-bulk-importer-" + index.getAndIncrement());
-            return thread;
-        }
-    }
 }

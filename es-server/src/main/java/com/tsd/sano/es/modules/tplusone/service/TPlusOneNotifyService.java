@@ -63,7 +63,7 @@ public class TPlusOneNotifyService {
                     .toString();
             notifyService.send(new NotifyMessage("SUCCESS", taskId(task), title, content));
         } catch (Exception error) {
-            log.error("===> ES-Import notify success failed before send. taskId={}, error={}",
+            log.error("===> ES-TPlusOne notify success failed before send. taskId={}, error={}",
                     taskId(task), error.getMessage(), error);
         }
     }
@@ -98,7 +98,7 @@ public class TPlusOneNotifyService {
                     .toString();
             notifyService.send(new NotifyMessage("FAILED", taskId(task), title, content));
         } catch (Exception error) {
-            log.error("===> ES-Import notify failure failed before send. taskId={}, error={}",
+            log.error("===> ES-TPlusOne notify failure failed before send. taskId={}, error={}",
                     taskId(task), error.getMessage(), error);
         }
     }
@@ -139,7 +139,7 @@ public class TPlusOneNotifyService {
             notifyService.send(new NotifyMessage(
                     "TIMEOUT_PARTIAL", taskId(task), title, content));
         } catch (Exception error) {
-            log.error("===> ES-Import notify timeout partial failed before send. taskId={}, error={}",
+            log.error("===> ES-TPlusOne notify timeout partial failed before send. taskId={}, error={}",
                     taskId(task), error.getMessage(), error);
         }
     }

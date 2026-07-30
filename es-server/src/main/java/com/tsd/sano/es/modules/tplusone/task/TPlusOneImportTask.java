@@ -1,19 +1,19 @@
 package com.tsd.sano.es.modules.tplusone.task;
 
 import com.tsd.sano.es.core.exception.ServiceException;
-import com.tsd.sano.es.modules.tplusone.pipeline.TPlusOneImportService;
-import com.tsd.sano.es.modules.index.EsIndexManager;
 import com.tsd.sano.es.modules.config.EsImportProperties;
+import com.tsd.sano.es.modules.config.EsServiceModeManager;
 import com.tsd.sano.es.modules.config.SyncTableConfig;
-import com.tsd.sano.es.modules.tplusone.model.TPlusOneImportConfig;
-import com.tsd.sano.es.modules.tplusone.model.ImportStatistics;
-import com.tsd.sano.es.modules.tplusone.model.SanoImportTask;
-import com.tsd.sano.es.modules.tplusone.model.SanoImportTaskStatus;
+import com.tsd.sano.es.modules.coordination.service.SyncDrainCoordinator;
+import com.tsd.sano.es.modules.index.EsIndexManager;
 import com.tsd.sano.es.modules.polling.model.SyncCheckpoint;
 import com.tsd.sano.es.modules.polling.service.PollingIndexService;
 import com.tsd.sano.es.modules.reconcile.service.ReconcileStatisticsService;
-import com.tsd.sano.es.modules.config.EsServiceModeManager;
-import com.tsd.sano.es.modules.coordination.service.SyncDrainCoordinator;
+import com.tsd.sano.es.modules.tplusone.model.ImportStatistics;
+import com.tsd.sano.es.modules.tplusone.model.SanoImportTask;
+import com.tsd.sano.es.modules.tplusone.model.SanoImportTaskStatus;
+import com.tsd.sano.es.modules.tplusone.model.TPlusOneImportConfig;
+import com.tsd.sano.es.modules.tplusone.pipeline.TPlusOneImportService;
 import com.tsd.sano.es.modules.tplusone.service.SanoImportTaskService;
 import com.tsd.sano.es.modules.tplusone.service.TPlusOneNotifyService;
 import org.apache.commons.lang3.StringUtils;
@@ -129,7 +129,7 @@ public class TPlusOneImportTask {
         }
         if (!drainCoordinator.tryStartTPlusOneDispatcher()) {
             // 已有手动或定时导入正在执行，本轮定时任务跳过，待下一轮继续扫描任务索引
-            log.warn("===> ES-Import scheduled task skipped because dispatcher is busy or sync drain is active.");
+            log.warn("===> ES-TPlusOne scheduled task skipped because dispatcher is busy or sync drain is active.");
             return;
         }
 
@@ -137,14 +137,14 @@ public class TPlusOneImportTask {
         try {
             long maxRunMillis = Math.max(1, properties.getTPlusOne().getMaxRunMinutes()) * 60L * 1000L;
             long deadlineMillis = System.currentTimeMillis() + maxRunMillis;
-            log.info("===> ES-Import scheduled task start. date={}, maxRunMinutes={}",
+            log.info("===> ES-TPlusOne scheduled task start. date={}, maxRunMinutes={}",
                     importDate, properties.getTPlusOne().getMaxRunMinutes());
 
             repairExpiredRunningTasks();
             createPendingTasks(importDate);
             runPendingTasks(deadlineMillis);
 
-            log.info("===> ES-Import scheduled task finished. date={}", importDate);
+            log.info("===> ES-TPlusOne scheduled task finished. date={}", importDate);
         } finally {
             finishDispatcherAndResumeCancelledDrain();
         }
@@ -160,7 +160,7 @@ public class TPlusOneImportTask {
     public boolean importDateRange(LocalDate startDate, LocalDate endDate) {
         requireEnabled();
         if (!drainCoordinator.tryStartTPlusOneDispatcher()) {
-            log.warn("===> ES-Import manual task submit skipped because dispatcher is busy or sync drain is active. startDate={}, endDate={}",
+            log.warn("===> ES-TPlusOne manual task submit skipped because dispatcher is busy or sync drain is active. startDate={}, endDate={}",
                     startDate, endDate);
             return false;
         }
@@ -170,7 +170,7 @@ public class TPlusOneImportTask {
                 try {
                     long maxRunMillis = Math.max(1, properties.getTPlusOne().getMaxRunMinutes()) * 60L * 1000L;
                     long deadlineMillis = System.currentTimeMillis() + maxRunMillis;
-                    log.info("===> ES-Import manual task start. startDate={}, endDate={}, maxRunMinutes={}",
+                    log.info("===> ES-TPlusOne manual task start. startDate={}, endDate={}, maxRunMinutes={}",
                             startDate, endDate, properties.getTPlusOne().getMaxRunMinutes());
 
                     repairExpiredRunningTasks();
@@ -182,10 +182,10 @@ public class TPlusOneImportTask {
                     }
                     runPendingTasks(deadlineMillis);
 
-                    log.info("===> ES-Import manual task finished. startDate={}, endDate={}", startDate, endDate);
+                    log.info("===> ES-TPlusOne manual task finished. startDate={}, endDate={}", startDate, endDate);
                 } catch (Exception e) {
                     // 异步任务异常不会返回给HTTP调用方，必须在后台线程中明确记录
-                    log.error("===> ES-Import manual task failed. startDate={}, endDate={}, error={}",
+                    log.error("===> ES-TPlusOne manual task failed. startDate={}, endDate={}, error={}",
                             startDate, endDate, e.getMessage(), e);
                 } finally {
                     finishDispatcherAndResumeCancelledDrain();
@@ -194,7 +194,7 @@ public class TPlusOneImportTask {
             return true;
         } catch (Exception e) {
             finishDispatcherAndResumeCancelledDrain();
-            log.error("===> ES-Import manual task submit failed. startDate={}, endDate={}, error={}",
+            log.error("===> ES-TPlusOne manual task submit failed. startDate={}, endDate={}, error={}",
                     startDate, endDate, e.getMessage(), e);
             return false;
         }
@@ -237,7 +237,7 @@ public class TPlusOneImportTask {
                         () -> importTaskService.addTask(task), null);
                 if (added == null) {
                     stoppedByDrain = true;
-                    log.warn("===> ES-Import stop creating manual tasks at drain boundary. alias={}, date={}",
+                    log.warn("===> ES-TPlusOne stop creating manual tasks at drain boundary. alias={}, date={}",
                             table.getIndexAlias(), importDate);
                     break;
                 }
@@ -250,7 +250,7 @@ public class TPlusOneImportTask {
             } catch (Exception e) {
                 // 单天任务写入失败不阻断日期段内其他任务，便于一次补数尽可能推进
                 failedCount++;
-                log.error("===> ES-Import manual task create failed. alias={}, table={}, date={}, error={}",
+                log.error("===> ES-TPlusOne manual task create failed. alias={}, table={}, date={}, error={}",
                         table.getIndexAlias(), tableName, importDate, e.getMessage(), e);
             }
         }
@@ -262,7 +262,7 @@ public class TPlusOneImportTask {
 
         if (!drainCoordinator.tryStartTPlusOneDispatcher()) {
             // 任务已落库，当前同步完成后，下一次队列扫描会继续处理PENDING任务
-            log.info("===> ES-Import manual table task queued. alias={}, table={}, startDate={}, endDate={}, created={}, existing={}, failed={}",
+            log.info("===> ES-TPlusOne manual table task queued. alias={}, table={}, startDate={}, endDate={}, created={}, existing={}, failed={}",
                     table.getIndexAlias(), tableName, startDate, endDate, createdCount, existingCount, failedCount);
             return "任务已入队，当前已有同步任务执行中，等待后续队列扫描created=" + createdCount
                     + ", existing=" + existingCount + ", failed=" + failedCount;
@@ -273,7 +273,7 @@ public class TPlusOneImportTask {
                 try {
                     long maxRunMillis = Math.max(1, properties.getTPlusOne().getMaxRunMinutes()) * 60L * 1000L;
                     long deadlineMillis = System.currentTimeMillis() + maxRunMillis;
-                    log.info("===> ES-Import manual table task start. alias={}, table={}, startDate={}, endDate={}, maxRunMinutes={}",
+                    log.info("===> ES-TPlusOne manual table task start. alias={}, table={}, startDate={}, endDate={}, maxRunMinutes={}",
                             table.getIndexAlias(), tableName, startDate, endDate,
                             properties.getTPlusOne().getMaxRunMinutes());
 
@@ -281,11 +281,11 @@ public class TPlusOneImportTask {
                     // 复用待任务队列扫描，按现有顺序串行执行，不额外创建并发同步链路
                     runPendingTasks(deadlineMillis);
 
-                    log.info("===> ES-Import manual table task finished. alias={}, table={}, startDate={}, endDate={}",
+                    log.info("===> ES-TPlusOne manual table task finished. alias={}, table={}, startDate={}, endDate={}",
                             table.getIndexAlias(), tableName, startDate, endDate);
                 } catch (Exception e) {
                     // 后台编排异常需要明确记录，但不能影响已经落库的任务后续被定时器续跑
-                    log.error("===> ES-Import manual table task dispatcher failed. alias={}, table={}, startDate={}, endDate={}, error={}",
+                    log.error("===> ES-TPlusOne manual table task dispatcher failed. alias={}, table={}, startDate={}, endDate={}, error={}",
                             table.getIndexAlias(), tableName, startDate, endDate, e.getMessage(), e);
                 } finally {
                     finishDispatcherAndResumeCancelledDrain();
@@ -295,7 +295,7 @@ public class TPlusOneImportTask {
                     + ", existing=" + existingCount + ", failed=" + failedCount;
         } catch (Exception e) {
             finishDispatcherAndResumeCancelledDrain();
-            log.error("===> ES-Import manual table task submit failed. alias={}, table={}, error={}",
+            log.error("===> ES-TPlusOne manual table task submit failed. alias={}, table={}, error={}",
                     table.getIndexAlias(), tableName, e.getMessage(), e);
             return "任务已写入待执行队列，但后台扫描提交失败，等待下次定时任务处理created=" + createdCount
                     + ", existing=" + existingCount + ", failed=" + failedCount;
@@ -355,7 +355,7 @@ public class TPlusOneImportTask {
         }
 
         if (!drainCoordinator.tryStartTPlusOneDispatcher()) {
-            log.info("===> ES-Import polling repair task queued behind current dispatcher. taskId={}, index={}",
+            log.info("===> ES-TPlusOne polling repair task queued behind current dispatcher. taskId={}, index={}",
                     task.getTaskId(), indexName);
             return "Polling历史修复任务已入队，等待当前任务结束后执行taskId=" + task.getTaskId()
                     + "；注意：全量upsert不会删除ES多余文档，对账仍不一致时需人工重建索引";
@@ -366,15 +366,15 @@ public class TPlusOneImportTask {
                 try {
                     long maxRunMillis = Math.max(1, properties.getTPlusOne().getMaxRunMinutes()) * 60L * 1000L;
                     long deadlineMillis = System.currentTimeMillis() + maxRunMillis;
-                    log.info("===> ES-Import polling repair dispatcher start. taskId={}, index={}",
+                    log.info("===> ES-TPlusOne polling repair dispatcher start. taskId={}, index={}",
                             task.getTaskId(), indexName);
                     repairExpiredRunningTasks();
                     runPendingTasks(deadlineMillis);
-                    log.info("===> ES-Import polling repair dispatcher finished. taskId={}, index={}",
+                    log.info("===> ES-TPlusOne polling repair dispatcher finished. taskId={}, index={}",
                             task.getTaskId(), indexName);
                 } catch (Exception error) {
                     // 任务已经持久化，后台扫描提交后的异常只记录，后续定时扫描仍可继续处理
-                    log.error("===> ES-Import polling repair dispatcher failed. taskId={}, error={}",
+                    log.error("===> ES-TPlusOne polling repair dispatcher failed. taskId={}, error={}",
                             task.getTaskId(), error.getMessage(), error);
                 } finally {
                     finishDispatcherAndResumeCancelledDrain();
@@ -384,7 +384,7 @@ public class TPlusOneImportTask {
                     + "；注意：全量upsert不会删除ES多余文档，对账仍不一致时需人工重建索引";
         } catch (Exception error) {
             finishDispatcherAndResumeCancelledDrain();
-            log.error("===> ES-Import polling repair dispatcher submit failed. taskId={}, error={}",
+            log.error("===> ES-TPlusOne polling repair dispatcher submit failed. taskId={}, error={}",
                     task.getTaskId(), error.getMessage(), error);
             return "Polling历史修复任务已入队，但后台扫描提交失败，等待下次任务扫描taskId="
                     + task.getTaskId();
@@ -411,12 +411,12 @@ public class TPlusOneImportTask {
                 task.setLastError("Recovered expired RUNNING task before scheduled import.");
                 task.setFinishedAt(LocalDateTime.now());
                 importTaskService.updateTask(task);
-                log.warn("===> ES-Import repair expired running task. taskId={}, alias={}, table={}, date={}, updatedAt={}",
+                log.warn("===> ES-TPlusOne repair expired running task. taskId={}, alias={}, table={}, date={}, updatedAt={}",
                         task.getTaskId(), task.getIndexAlias(), task.getTableName(), task.getImportDate(), expiredUpdatedAt);
             }
         } catch (Exception e) {
             // RUNNING残留修复失败不阻断本轮任务，后续创建和执行任务继续进行
-            log.warn("===> ES-Import repair expired running task failed, continue scheduled import. error={}", e.getMessage());
+            log.warn("===> ES-TPlusOne repair expired running task failed, continue scheduled import. error={}", e.getMessage());
         }
     }
 
@@ -426,7 +426,7 @@ public class TPlusOneImportTask {
     private void createPendingTasks(LocalDate importDate) {
         for (SyncTableConfig table : properties.getTPlusOneTables()) {
             if (!drainCoordinator.isAcceptingNewWork()) {
-                log.info("===> ES-Import stop creating pending tasks because sync drain is active. date={}", importDate);
+                log.info("===> ES-TPlusOne stop creating pending tasks because sync drain is active. date={}", importDate);
                 return;
             }
             try {
@@ -448,12 +448,12 @@ public class TPlusOneImportTask {
                     return Boolean.TRUE;
                 }, null);
                 if (accepted == null) {
-                    log.info("===> ES-Import pending task creation stopped at drain boundary. date={}", importDate);
+                    log.info("===> ES-TPlusOne pending task creation stopped at drain boundary. date={}", importDate);
                     return;
                 }
             } catch (Exception e) {
                 // 单表任务创建失败不影响其他表落任务，便于后续人工排查和补偿
-                log.error("===> ES-Import create pending task failed. alias={}, table={}, date={}, error={}",
+                log.error("===> ES-TPlusOne create pending task failed. alias={}, table={}, date={}, error={}",
                         table.getIndexAlias(), table.getTableName(), importDate, e.getMessage(), e);
             }
         }
@@ -465,28 +465,28 @@ public class TPlusOneImportTask {
     private void runPendingTasks(long deadlineMillis) {
         while (true) {
             if (!drainCoordinator.isAcceptingNewWork()) {
-                log.info("===> ES-Import stop scanning pending tasks because sync drain is active.");
+                log.info("===> ES-TPlusOne stop scanning pending tasks because sync drain is active.");
                 return;
             }
             List<SanoImportTask> tasks = importTaskService.listPendingTasks(
                     properties.getTPlusOne().getTaskFetchLimit());
             if (tasks.isEmpty()) {
-                log.info("===> ES-Import no pending task.");
+                log.info("===> ES-TPlusOne no pending task.");
                 return;
             }
 
             for (SanoImportTask task : tasks) {
                 if (!drainCoordinator.isAcceptingNewWork()) {
-                    log.info("===> ES-Import stop starting pending tasks at drain boundary.");
+                    log.info("===> ES-TPlusOne stop starting pending tasks at drain boundary.");
                     return;
                 }
                 if (System.currentTimeMillis() >= deadlineMillis) {
                     // 本轮调度到达运行上限后不再启动新任务，已经完成落库的PENDING任务留待下一轮继续
-                    log.warn("===> ES-Import scheduled task reach max run time, stop starting new task. maxRunMinutes={}",
+                    log.warn("===> ES-TPlusOne scheduled task reach max run time, stop starting new task. maxRunMinutes={}",
                             properties.getTPlusOne().getMaxRunMinutes());
                     return;
                 }
-
+                // T+1任务按索引顺序串行执行，避免同一表同一天的多次导入产生脏数据
                 if (!executeTask(task, deadlineMillis)) {
                     return;
                 }
@@ -503,8 +503,9 @@ public class TPlusOneImportTask {
         if (!drainCoordinator.tryBeginTPlusOneTask(task)) {
             return false;
         }
-
+        // 续跑任务从最后连续完成批次的安全断点后继续读取
         boolean resumeTask = StringUtils.equals(task.getStatus(), SanoImportTaskStatus.TIMEOUT_PARTIAL.name());
+        // Polling历史修复任务不依赖任务索引的新增字段，必须在执行前重新识别表模式和日期边界
         boolean pollingRepair = false;
         ImportStatistics statistics = null;
         SanoImportTaskStatus terminalStatus = null;
@@ -517,6 +518,7 @@ public class TPlusOneImportTask {
                     .filter(config -> StringUtils.equals(config.getTableName(), task.getTableName()))
                     .findFirst()
                     .orElse(null);
+            // 如果T+1表配置被禁用或模式不匹配，尝试从Polling表配置中识别
             if (table == null) {
                 // Polling历史修复没有新增任务类型字段，因此执行前必须依靠当前表模式和日期边界重新识别
                 table = properties.getPollingTables().stream()
@@ -575,7 +577,7 @@ public class TPlusOneImportTask {
             importTaskService.updateTask(task);
             drainCoordinator.onTPlusOneTaskRunning(task);
 
-            // 索引存在时复用；索引缺失时只有安全断点为0才允许创建。
+            // 调用导入服务执行单表单天导入，返回累计统计结果
             statistics = importService.importData(config, deadlineMillis);
 
             if (statistics.isTimeoutPartial()) {
@@ -610,7 +612,7 @@ public class TPlusOneImportTask {
                 // 普通T+1和Polling历史修复共用独立异步对账；提交失败不能覆盖已持久化的SUCCESS
                 reconcileStatisticsService.reconcile(table, importDate);
             } catch (RuntimeException reconcileError) {
-                log.warn("===> ES-Import reconcile submit failed after task success. "
+                log.warn("===> ES-TPlusOne reconcile submit failed after task success. "
                                 + "taskId={}, pollingRepair={}, error={}",
                         task.getTaskId(), pollingRepair,
                         reconcileError.getMessage(), reconcileError);
@@ -624,26 +626,25 @@ public class TPlusOneImportTask {
                     task.setStatus(SanoImportTaskStatus.FAILED.name());
                     task.setLastError(terminalError);
                     task.setFinishedAt(LocalDateTime.now());
-                    terminalUpdateAttempted = true;
                     importTaskService.updateTask(task);
                     persistenceSafe = true;
                 } catch (Exception persistError) {
                     // 无法确认FAILED是否持久化时，drain必须报告FAILED，不能把该任务视为安全停机
                     persistenceSafe = false;
                     terminalError = StringUtils.left("Task state persistence failed: " + persistError.getMessage(), 1000);
-                    log.error("===> ES-Import failed task state could not be persisted. taskId={}, error={}",
+                    log.error("===> ES-TPlusOne failed task state could not be persisted. taskId={}, error={}",
                             task.getTaskId(), persistError.getMessage(), persistError);
                 }
             } else {
                 // SUCCESS/TIMEOUT_PARTIAL更新结果不确定时不再用FAILED覆盖，避免把实际已提交的终态反向改写
                 persistenceSafe = false;
-                log.error("===> ES-Import terminal task state persistence is uncertain. taskId={}, attemptedStatus={}, error={}",
+                log.error("===> ES-TPlusOne terminal task state persistence is uncertain. taskId={}, attemptedStatus={}, error={}",
                         task.getTaskId(), task.getStatus(), e.getMessage(), e);
             }
             notifyService.notifyFailed(task, statistics, e);
 
             // 当前任务失败后继续执行后续任务，避免单表异常阻塞整个调度批次
-            log.error("===> ES-Import pending task failed. taskId={}, alias={}, table={}, date={}, error={}",
+            log.error("===> ES-TPlusOne pending task failed. taskId={}, alias={}, table={}, date={}, error={}",
                     task.getTaskId(), task.getIndexAlias(), task.getTableName(), task.getImportDate(), e.getMessage(), e);
         } finally {
             drainCoordinator.finishTPlusOneTask(
@@ -697,7 +698,7 @@ public class TPlusOneImportTask {
             });
         } catch (Exception e) {
             drainCoordinator.returnCancelledDrainResumeTasks(taskIds);
-            log.error("===> ES-Import submit cancelled-drain resume tasks failed. taskIds={}, error={}",
+            log.error("===> ES-TPlusOne submit cancelled-drain resume tasks failed. taskIds={}, error={}",
                     taskIds, e.getMessage(), e);
         }
     }

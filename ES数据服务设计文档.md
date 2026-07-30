@@ -102,7 +102,6 @@ com.tsd.sano.es
 | `JdbcDataReader` | MySQL count 和分页读取，读取结果写入队列 |
 | `EsBulkImporter` | 消费队列并 Bulk 写入 ES |
 | `EsIndexManager` | 创建索引、调整导入期参数、刷新、绑定 alias、清理历史索引 |
-| `ImportMonitor` | 导入任务开始、失败、结束日志 |
 | `EsImportProperties` | `sano.es.import` 配置映射 |
 | `EsImportConfig` | 单次导入任务的运行配置 |
 | `ImportContext` | 单次导入任务上下文 |

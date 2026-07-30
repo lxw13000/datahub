@@ -102,11 +102,11 @@ public class SanoImportTaskService {
      */
     public void createIndex() {
         if (exists()) {
-            log.info("===> ES-Import task index already exists. index={}", TASK_INDEX);
+            log.info("===> ES-TPlusOne task index already exists. index={}", TASK_INDEX);
             throw new ServiceException("ES-Import task index already exists.");
         }
         indexManager.createIndex(TASK_INDEX, TASK_MAPPING_FILE);
-        log.info("===> ES-Import task index created. index={}", TASK_INDEX);
+        log.info("===> ES-TPlusOne task index created. index={}", TASK_INDEX);
     }
 
     /**
@@ -151,11 +151,11 @@ public class SanoImportTaskService {
                     .build();
             IndexResponse response = client.index(request);
 
-            log.info("===> ES-Import task created. taskId={}, result={}", task.getTaskId(), response.result());
+            log.info("===> ES-TPlusOne task created. taskId={}, result={}", task.getTaskId(), response.result());
             return true;
         } catch (ElasticsearchException e) {
             if (e.status() == 409) {
-                log.info("===> ES-Import task already exists. taskId={}", task.getTaskId());
+                log.info("===> ES-TPlusOne task already exists. taskId={}", task.getTaskId());
                 return false;
             }
             throw new ServiceException("ES import add task failed, taskId=" + task.getTaskId()
@@ -164,7 +164,7 @@ public class SanoImportTaskService {
             // Elasticsearch Java Client可能把HTTP 409作为低层ResponseException抛出。
             if (e instanceof ResponseException responseException
                     && responseException.getResponse().getStatusLine().getStatusCode() == 409) {
-                log.info("===> ES-Import task already exists. taskId={}", task.getTaskId());
+                log.info("===> ES-TPlusOne task already exists. taskId={}", task.getTaskId());
                 return false;
             }
             throw new ServiceException("ES import add task failed, taskId=" + task.getTaskId()
@@ -221,7 +221,7 @@ public class SanoImportTaskService {
                             .build();
             UpdateResponse<SanoImportTask> response = client.update(request, SanoImportTask.class);
             boolean accepted = response.result() != Result.NoOp;
-            log.info("===> ES-Import polling repair task submit result. taskId={}, result={}",
+            log.info("===> ES-TPlusOne polling repair task submit result. taskId={}, result={}",
                     task.getTaskId(), response.result());
             return accepted;
         } catch (IOException | ElasticsearchException error) {
@@ -253,7 +253,7 @@ public class SanoImportTaskService {
                     .refresh(Refresh.WaitFor)
                     .doc(task), SanoImportTask.class);
 
-            log.info("===> ES-Import task updated. taskId={}, result={}", task.getTaskId(), response.result());
+            log.info("===> ES-TPlusOne task updated. taskId={}, result={}", task.getTaskId(), response.result());
             return true;
         } catch (IOException | ElasticsearchException e) {
             throw new ServiceException("ES import update task failed, taskId=" + task.getTaskId()

@@ -133,7 +133,7 @@ public class TPlusOneIndexService {
         try {
             indexManager.deleteIndex(expiredIndex);
         } catch (RuntimeException error) {
-            log.warn("===> ES-Import delete history index failed. index={}, error={}",
+            log.warn("===> ES-TPlusOne delete history index failed. index={}, error={}",
                     expiredIndex, error.getMessage(), error);
         }
     }

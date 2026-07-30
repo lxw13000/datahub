@@ -53,9 +53,6 @@ public class TPlusOneImportService {
     /** ES Bulk队列消费组件。 */
     private final TPlusOneBulkWriter bulkWriter;
 
-    /** 导入过程监控组件。 */
-    private final ImportMonitor importMonitor;
-
     /** 部署排空与当前T+1上下文协调组件。 */
     private final SyncDrainCoordinator drainCoordinator;
 
@@ -69,14 +66,12 @@ public class TPlusOneImportService {
                                  TPlusOneIndexService indexService,
                                  TPlusOneJdbcReader jdbcReader,
                                  TPlusOneBulkWriter bulkWriter,
-                                 ImportMonitor importMonitor,
                                  SyncDrainCoordinator drainCoordinator,
                                  EsServiceModeManager serviceModeManager) {
         this.properties = properties;
         this.indexService = indexService;
         this.jdbcReader = jdbcReader;
         this.bulkWriter = bulkWriter;
-        this.importMonitor = importMonitor;
         this.drainCoordinator = drainCoordinator;
         this.serviceModeManager = serviceModeManager;
     }
@@ -123,30 +118,25 @@ public class TPlusOneImportService {
                 boolean optimized = false;
 
                 try {
-                    log.info("===> ES-Import start. alias={}, index={}, table={}, date={}, startId={}",
+                    log.info("===> ES-TPlusOne start. alias={}, index={}, table={}, date={}, startId={}",
                             config.getIndexAlias(),
                             config.getIndexName(),
                             config.getTableName(),
                             config.getImportDate(),
                             config.getStartId());
 
-                    // 监控开关关闭时不产生监控日志或额外统计开销。
-                    if (properties.getTPlusOne().isEnableMonitor()) {
-                        importMonitor.onStart(context);
-                    }
-
                     // 先统计总量，避免无数据时创建空索引并挂alias。
                     long total = jdbcReader.count(context);
                     if (statistics.isTimeoutPartial()) {
                         // drain在COUNT之前或执行期间到达时，不再创建索引或启动Reader/Bulk流水线。
-                        log.warn("===> ES-Import stopped after count for drain. alias={}, table={}, date={}, operationId={}",
+                        log.warn("===> ES-TPlusOne stopped after count for drain. alias={}, table={}, date={}, operationId={}",
                                 config.getIndexAlias(), config.getTableName(), config.getImportDate(),
                                 statistics.getStopOperationId());
                         return statistics;
                     }
                     if (total <= 0L) {
                         // 指定日期无数据属于正常业务结果，不创建空索引、不切换alias，任务状态按SUCCESS处理。
-                        log.warn("===> ES-Import no data, skip import. alias={}, table={}, date={}",
+                        log.warn("===> ES-TPlusOne no data, skip import. alias={}, table={}, date={}",
                                 config.getIndexAlias(), config.getTableName(), config.getImportDate());
                         // 即使当天无数据，也按表级保留策略尝试清理一个刚过期的历史索引。
                         indexService.deleteHistoryIndex(context);
@@ -154,7 +144,7 @@ public class TPlusOneImportService {
                     }
 
                     if (indexService.exists(config.getIndexName())) {
-                        log.info("===> ES-Import reuse existing index. index={}, startId={}",
+                        log.info("===> ES-TPlusOne reuse existing index. index={}, startId={}",
                                 config.getIndexName(), config.getStartId());
                     } else {
                         if (config.getStartId() > 0L) {
@@ -163,7 +153,7 @@ public class TPlusOneImportService {
                         }
                         // 新索引不提前绑定Alias，避免半成品数据进入查询范围。
                         indexService.createIndex(context);
-                        log.info("===> ES-Import index created. index={}", config.getIndexName());
+                        log.info("===> ES-TPlusOne index created. index={}", config.getIndexName());
                     }
 
                     // 大批量写入前关闭refresh等参数，降低ES写入开销。
@@ -191,7 +181,7 @@ public class TPlusOneImportService {
                     if (statistics.isTimeoutPartial()) {
                         // 超时暂停只恢复索引参数并刷新，不切换alias，避免线上读到半成品索引。
                         indexService.afterImport(context);
-                        log.warn("===> ES-Import timeout partial. alias={}, index={}, total={}, read={}, success={}, failed={}, lastReadId={}, safeCheckpointId={}, blockedSequence={}, costMs={}",
+                        log.warn("===> ES-TPlusOne timeout partial. alias={}, index={}, total={}, read={}, success={}, failed={}, lastReadId={}, safeCheckpointId={}, blockedSequence={}, costMs={}",
                                 config.getIndexAlias(),
                                 config.getIndexName(),
                                 statistics.getTotal().get(),
@@ -212,7 +202,7 @@ public class TPlusOneImportService {
                     indexService.bindAlias(context);
                     indexService.deleteHistoryIndex(context);
 
-                    log.info("===> ES-Import success. alias={}, index={}, total={}, success={}, costMs={}",
+                    log.info("===> ES-TPlusOne success. alias={}, index={}, total={}, success={}, costMs={}",
                             config.getIndexAlias(),
                             config.getIndexName(),
                             statistics.getTotal().get(),
@@ -222,18 +212,32 @@ public class TPlusOneImportService {
                 } catch (Exception e) {
                     // 异常时主动停止调度线程池，try-with-resources会再次兜底关闭。
                     bulkExecutor.shutdownNow();
-                    if (properties.getTPlusOne().isEnableMonitor()) {
-                        importMonitor.onError(context, e);
-                    }
                     if (optimized) {
                         // 导入失败也尽量恢复索引参数，避免refresh长期关闭。
                         try {
                             indexService.afterImport(context);
                         } catch (Exception restoreError) {
-                            log.warn("===> ES-Import restore index settings failed. index={}, error={}",
+                            log.warn("===> ES-TPlusOne restore index settings failed. index={}, error={}",
                                     context.getConfig().getIndexName(), restoreError.getMessage());
                         }
                     }
+                    // 一次导入只输出一个失败终态，任务持久化和通知由上层TPlusOneImportTask继续处理。
+                    log.error("===> ES-TPlusOne failed. alias={}, index={}, table={}, date={}, "
+                                    + "total={}, read={}, success={}, failed={}, lastReadId={}, "
+                                    + "safeCheckpointId={}, costMs={}, error={}",
+                            config.getIndexAlias(),
+                            config.getIndexName(),
+                            config.getTableName(),
+                            config.getImportDate(),
+                            statistics.getTotal().get(),
+                            statistics.getRead().get(),
+                            statistics.getSuccess().get(),
+                            statistics.getFailed().get(),
+                            statistics.getLastId(),
+                            statistics.getLastSuccessId(),
+                            System.currentTimeMillis() - statistics.getStartTime(),
+                            e.getMessage(),
+                            e);
                     throw e instanceof ServiceException serviceException
                             ? serviceException
                             : new ServiceException("ES import failed, error=" + e.getMessage(), e);
@@ -241,9 +245,6 @@ public class TPlusOneImportService {
                     // 正常路径额度已由Bulk批次释放；异常路径在这里兜底释放队列和在途批次额度。
                     context.releaseAllMemoryReservations();
                     statistics.setEndTime(System.currentTimeMillis());
-                    if (properties.getTPlusOne().isEnableMonitor()) {
-                        importMonitor.onFinish(context);
-                    }
                 }
             }
         } finally {
@@ -305,7 +306,7 @@ public class TPlusOneImportService {
         }
 
         if (failed > 0L) {
-            log.warn("===> ES-Import finished with partial failed documents. total={}, success={}, failed={}, failureRate={}",
+            log.warn("===> ES-TPlusOne finished with partial failed documents. total={}, success={}, failed={}, failureRate={}",
                     total, success, failed, String.format("%.6f", failureRate));
         }
     }

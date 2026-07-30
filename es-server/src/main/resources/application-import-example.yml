@@ -68,8 +68,6 @@ sano:
       max-failed-documents: 1000
       # 失败率超过该值时不切换Alias，0.001表示0.1%。
       max-failure-rate: 0.001
-      # 是否输出T+1导入过程监控日志。
-      enable-monitor: true
       # T+1批量写入期间是否临时关闭索引自动Refresh。
       disable-refresh: true
       # T+1批量写入期间是否临时将索引副本数调整为0。

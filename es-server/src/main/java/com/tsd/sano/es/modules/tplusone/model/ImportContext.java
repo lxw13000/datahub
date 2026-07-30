@@ -248,28 +248,18 @@ public class ImportContext {
     }
 
     /**
-     * 按Reader读取顺序创建数据批次。
-     *
-     * <p>批次在成功入队前已经取得sequence；若入队过程异常，本次导入会整体中止，
-     * 因此不会在同一上下文中留下可继续执行的sequence空洞。</p>
-     */
-    public ImportBatch createBatch(List<Map<String, Object>> rows, long lastId) {
-        return createBatch(rows, lastId, null);
-    }
-
-    /**
      * 创建携带T+1内存额度的数据批次。
      *
-     * <p>Reservation在批次完成前由上下文接管；调用方创建成功后不得自行关闭。</p>
+     * <p>批次按Reader读取顺序取得sequence，Reservation在批次完成前由上下文接管；
+     * 调用方创建成功后不得自行关闭。若入队过程异常，本次导入会整体中止，不会继续执行
+     * 存在sequence空洞的上下文。</p>
      */
     public ImportBatch createBatch(List<Map<String, Object>> rows,
                                    long lastId,
                                    TPlusOneMemoryLimiter.Reservation reservation) {
         long sequence = lastEnqueuedSequence.incrementAndGet();
         ImportBatch batch = ImportBatch.data(sequence, lastId, rows);
-        if (reservation != null) {
-            memoryReservations.put(sequence, reservation);
-        }
+        memoryReservations.put(sequence, reservation);
         return batch;
     }
 
