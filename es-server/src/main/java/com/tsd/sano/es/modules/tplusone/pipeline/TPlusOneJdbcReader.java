@@ -200,7 +200,8 @@ public class TPlusOneJdbcReader {
                             return;
                         }
 
-                        reservation.resize(estimateBatchBytes(rows));
+                        // Bulk失败时及时退出额度扩容等待，当前Reservation由finally归还。
+                        reservation.resize(estimateBatchBytes(rows), context::isAborted);
 
                         // 使用当前页最后一条ID作为下一页游标，避免offset深分页。
                         lastId = extractLastId(rows, idColumn);

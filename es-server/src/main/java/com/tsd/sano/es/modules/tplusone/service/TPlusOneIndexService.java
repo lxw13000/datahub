@@ -60,7 +60,7 @@ public class TPlusOneIndexService {
         String indexName = requireText(config.getIndexName(), "indexName");
         String mappingFile = requireText(config.getMappingFile(), "mappingFile");
         indexManager.createIndex(indexName, mappingFile);
-        log.info("===> ES import create index success, index={}, mappingFile={}", indexName, mappingFile);
+        log.info("===> ES-TPlusOne create index success. index={}, mappingFile={}", indexName, mappingFile);
     }
 
     /**

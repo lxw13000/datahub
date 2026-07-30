@@ -236,9 +236,8 @@ public class SanoImportTaskService {
      * <p>只更新已有任务，不做upsert，避免错误任务ID静默创建新文档。</p>
      *
      * @param task 导入任务
-     * @return true表示更新成功
      */
-    public boolean updateTask(SanoImportTask task) {
+    public void updateTask(SanoImportTask task) {
         requireTaskNotNull(task);
         if (StringUtils.isBlank(task.getTaskId())) {
             // 未显式传入taskId时，用tableName和importDate重新计算，便于调用方只维护业务字段。
@@ -254,7 +253,6 @@ public class SanoImportTaskService {
                     .doc(task), SanoImportTask.class);
 
             log.info("===> ES-TPlusOne task updated. taskId={}, result={}", task.getTaskId(), response.result());
-            return true;
         } catch (IOException | ElasticsearchException e) {
             throw new ServiceException("ES import update task failed, taskId=" + task.getTaskId()
                     + ", error=" + e.getMessage(), e);

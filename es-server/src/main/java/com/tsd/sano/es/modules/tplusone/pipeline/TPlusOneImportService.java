@@ -156,9 +156,10 @@ public class TPlusOneImportService {
                         log.info("===> ES-TPlusOne index created. index={}", config.getIndexName());
                     }
 
+                    // beforeImport可能只完成部分设置后抛出异常，必须提前标记以触发恢复流程。
+                    optimized = true;
                     // 大批量写入前关闭refresh等参数，降低ES写入开销。
                     indexService.beforeImport(context);
-                    optimized = true;
 
                     // Bulk消费者先启动，再由Reader生产数据，形成读写流水线。
                     Future<?> bulkFuture = bulkExecutor.submit(() -> bulkWriter.importFromQueue(context));
@@ -195,7 +196,16 @@ public class TPlusOneImportService {
                         return statistics;
                     }
 
-                    checkImportResult(statistics);
+                    boolean resumedWithoutRemainingRows = config.getStartId() > 0L
+                            && statistics.getRead().get() == 0L;
+                    if (resumedWithoutRemainingRows) {
+                        // 上次暂停点已经到达当天最大ID；仍需恢复索引设置并绑定Alias，不能误判为全部失败。
+                        log.info("===> ES-TPlusOne resume reached end. alias={}, index={}, date={}, startId={}",
+                                config.getIndexAlias(), config.getIndexName(),
+                                config.getImportDate(), config.getStartId());
+                    } else {
+                        checkImportResult(statistics);
+                    }
 
                     // 成功写入后恢复索引参数并刷新，随后再绑定业务alias。
                     indexService.afterImport(context);

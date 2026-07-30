@@ -112,8 +112,13 @@ public class TPlusOneMemoryLimiter {
 
     /**
      * 按查询后的实际估算调整已有预留，扩大时继续遵守T+1内存预算。
+     *
+     * <p>扩大额度等待期间定期检查Bulk是否已经中止，避免失败批次持有额度时
+     * Reader永久等待，导致任务和部署drain都无法结束。</p>
      */
-    private void resize(Reservation reservation, long requestedBytes) {
+    private void resize(Reservation reservation,
+                        long requestedBytes,
+                        BooleanSupplier stopRequested) {
         long newBytes = normalizeRequestedBytes(requestedBytes);
         try {
             lock.lockInterruptibly();
@@ -123,10 +128,16 @@ public class TPlusOneMemoryLimiter {
 
             long additionalBytes = newBytes - reservation.bytes;
             while (additionalBytes > 0L && usedBytes + additionalBytes > maxBytes) {
-                memoryAvailable.await();
+                if (stopRequested.getAsBoolean()) {
+                    throw new ServiceException("ES T+1 sync stopped while resizing memory reservation");
+                }
+                memoryAvailable.await(STOP_CHECK_INTERVAL_SECONDS, TimeUnit.SECONDS);
                 if (reservation.closed.get()) {
                     throw new IllegalStateException("Cannot resize closed ES sync memory reservation");
                 }
+            }
+            if (stopRequested.getAsBoolean()) {
+                throw new ServiceException("ES T+1 sync stopped before resizing memory reservation");
             }
             usedBytes += additionalBytes;
             reservation.bytes = newBytes;
@@ -172,10 +183,10 @@ public class TPlusOneMemoryLimiter {
         }
 
         /**
-         * 查询返回后按实际批次估算调整预留额度。
+         * 查询返回后按实际批次估算调整预留额度，等待期间响应调用方的停止状态。
          */
-        public void resize(long requestedBytes) {
-            owner.resize(this, requestedBytes);
+        public void resize(long requestedBytes, BooleanSupplier stopRequested) {
+            owner.resize(this, requestedBytes, stopRequested);
         }
 
         /**
