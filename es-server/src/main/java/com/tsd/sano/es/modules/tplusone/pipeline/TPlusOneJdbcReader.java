@@ -2,18 +2,18 @@ package com.tsd.sano.es.modules.tplusone.pipeline;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.tsd.sano.es.core.exception.ServiceException;
-import com.tsd.sano.es.modules.tplusone.model.TPlusOneImportConfig;
 import com.tsd.sano.es.modules.tplusone.model.ImportBatch;
 import com.tsd.sano.es.modules.tplusone.model.ImportContext;
+import com.tsd.sano.es.modules.tplusone.model.TPlusOneImportConfig;
 import org.apache.commons.lang3.StringUtils;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Service;
 
+import java.sql.Timestamp;
 import java.time.LocalDate;
 import java.time.format.DateTimeFormatter;
-import java.sql.Timestamp;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Locale;
@@ -269,8 +269,13 @@ public class TPlusOneJdbcReader {
         params.add(lastId);
         params.add(pageSize);
 
+        // 金币记录表主键包含user_id，按dt和id分页时强制使用专用联合索引，避免优化器回退到主键。
+        String indexHint = StringUtils.equals(tableName, "sano_wallet_coin_record")
+                || StringUtils.endsWith(tableName, ".sano_wallet_coin_record")
+                ? " FORCE INDEX (idx_polling_dt_id)"
+                : "";
         // idColumn和tableName已校验，只拼接标识符；值全部使用参数绑定。
-        String sql = "SELECT * FROM " + tableName
+        String sql = "SELECT * FROM " + tableName + indexHint
                 + " WHERE " + condition.whereSql()
                 + " AND " + idColumn + " > ?"
                 + " ORDER BY " + idColumn + " ASC"
