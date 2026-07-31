@@ -43,3 +43,7 @@ logs/
 
 # 运行时上传文件
 uploads/
+
+# 提现用户钻石分析工具的本地输入与输出
+/tools/withdraw-diamond-analysis/*.json
+/tools/withdraw-diamond-analysis/*.xlsx
