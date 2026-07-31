@@ -1,10 +1,11 @@
 package com.tsd.sano.es.modules.search.service;
 
-import ch.qos.logback.core.model.INamedModel;
 import co.elastic.clients.elasticsearch.ElasticsearchClient;
 import co.elastic.clients.elasticsearch._types.ElasticsearchException;
 import co.elastic.clients.elasticsearch._types.FieldValue;
 import co.elastic.clients.elasticsearch._types.SortOrder;
+import co.elastic.clients.elasticsearch._types.aggregations.CompositeAggregationSource;
+import co.elastic.clients.elasticsearch._types.aggregations.CompositeBucket;
 import co.elastic.clients.elasticsearch._types.aggregations.LongTermsBucket;
 import co.elastic.clients.elasticsearch._types.query_dsl.BoolQuery;
 import co.elastic.clients.elasticsearch.core.CountRequest;
@@ -15,8 +16,10 @@ import co.elastic.clients.elasticsearch.core.search.Hit;
 import com.tsd.sano.es.controller.diamond.dto.DiamondIncomeDistributionDTO;
 import com.tsd.sano.es.controller.diamond.dto.SatDiamond7DayDTO;
 import com.tsd.sano.es.controller.diamond.dto.SearchDiamondRecordDTO;
+import com.tsd.sano.es.controller.diamond.dto.WithdrawDiamondAnalysisDTO;
 import com.tsd.sano.es.controller.diamond.vo.DiamondIncomeRangeVO;
 import com.tsd.sano.es.controller.diamond.vo.DiamondRecordVO;
+import com.tsd.sano.es.controller.diamond.vo.WithdrawDiamondAnalysisVO;
 import com.tsd.sano.es.core.exception.ServiceException;
 import com.tsd.sano.es.core.util.TimeUtils;
 import com.tsd.sano.es.modules.search.constant.EsIndexAlias;
@@ -61,9 +64,19 @@ public class WalletDiamondRecordSearch {
     private static final int USER_BATCH_SIZE = 1_000;
 
     /**
-     * 钻石收入记录状态。
+     * Composite聚合每页最多返回的用户、状态和业务类型组合数。
+     */
+    private static final int COMPOSITE_PAGE_SIZE = 1_000;
+
+    /**
+     * 钻石加余额记录状态。
      */
     private static final int INCOME_STATUS = 1;
+
+    /**
+     * 钻石减余额记录状态。
+     */
+    private static final int EXPENSE_STATUS = -1;
 
     /**
      * 不纳入收入统计的直播时长奖励业务类型。
@@ -80,6 +93,17 @@ public class WalletDiamondRecordSearch {
             FROM sano_user
             WHERE create_time >= ?
               AND create_time < ?
+            """;
+
+    /**
+     * 指定时间范围内发生过提现的用户查询SQL。
+     */
+    private static final String WITHDRAW_USER_SQL = """
+            SELECT DISTINCT user_id
+            FROM sano_wallet_withdraw
+            WHERE create_time >= ?
+              AND create_time <= ?
+            ORDER BY user_id
             """;
 
     /**
@@ -176,8 +200,14 @@ public class WalletDiamondRecordSearch {
         boolBuilder.must(EsSearchUtil.getTerm("user_id", dto.getUserId()));
         // 时间字段使用 create_time，查询工具会按传入格式生成 ES date range
         EsSearchUtil.setDateEQ(boolBuilder, "create_time", TimeUtils.BASIC, dto.getStartTime(), dto.getEndTime());
-        // 直播收入业务类型：2，收到豪华礼物，12.收到幸运礼物，23.房主游戏分账
-        boolBuilder.must(EsSearchUtil.getTermsOr("business_type", List.of(2, 12, 23)));
+        List<Integer> bus;
+        if (dto.isSta74()) {
+            bus = List.of(2, 12, 23, LIVE_DURATION_REWARD_BUSINESS_TYPE);
+        } else {
+            // 直播收入业务类型：2，收到豪华礼物，12.收到幸运礼物，23.房主游戏分账
+            bus = List.of(2, 12, 23);
+        }
+        boolBuilder.must(EsSearchUtil.getTermsOr("business_type", bus));
         try {
             SearchRequest request = SearchRequest.of(search -> search
                     .index(indices)
@@ -256,15 +286,15 @@ public class WalletDiamondRecordSearch {
                         fromIndex,
                         Math.min(fromIndex + USER_BATCH_SIZE, userIds.size())
                 );
-                List<Integer> bus = new ArrayList<>();
-                if(dto.isSta74()){
-                    bus= List.of(2, 12, 23, LIVE_DURATION_REWARD_BUSINESS_TYPE);
-                }else {
-                    bus= List.of(2, 12, 23);
+                List<Integer> bus;
+                if (dto.isSta74()) {
+                    bus = List.of(2, 12, 23, LIVE_DURATION_REWARD_BUSINESS_TYPE);
+                } else {
+                    bus = List.of(2, 12, 23);
                 }
                 BoolQuery query = new BoolQuery.Builder()
                         .filter(EsSearchUtil.getTermsOr("user_id", batchUserIds))
-                        .filter(EsSearchUtil.getTermsOr("business_type",bus ))
+                        .filter(EsSearchUtil.getTermsOr("business_type", bus))
                         .build();
 
                 SearchResponse<Void> response = client.search(search -> search
@@ -336,6 +366,197 @@ public class WalletDiamondRecordSearch {
                 (incomeByUser.size() + USER_BATCH_SIZE - 1) / USER_BATCH_SIZE,
                 esStartedAt - startedAt, completedAt - esStartedAt,
                 completedAt - startedAt, result);
+        return result;
+    }
+
+    /**
+     * 查询指定时间内的提现用户，并统计这些用户在独立时间范围内的钻石来源和用途。
+     *
+     * <p>提现用户由MySQL筛选；钻石流水按用户分批查询ES，并使用Composite聚合完整遍历
+     * user_id、status和business_type组合，避免普通Terms聚合超过桶限制后截断结果。</p>
+     *
+     * @param dto 提现用户筛选时间和钻石统计时间
+     * @return 用户、余额变化方向和业务类型组成的扁平汇总明细
+     */
+    public List<WithdrawDiamondAnalysisVO> withdrawAnalysis(WithdrawDiamondAnalysisDTO dto) {
+        if (dto == null
+                || StringUtils.isBlank(dto.getWithdrawStartTime())
+                || StringUtils.isBlank(dto.getWithdrawEndTime())
+                || StringUtils.isBlank(dto.getStatisticsStartTime())
+                || StringUtils.isBlank(dto.getStatisticsEndTime())) {
+            throw new ServiceException("提现开始时间、提现结束时间、统计开始时间和统计结束时间不能为空");
+        }
+
+        LocalDateTime withdrawStartTime;
+        LocalDateTime withdrawEndTime;
+        LocalDateTime statisticsStartTime;
+        LocalDateTime statisticsEndTime;
+        try {
+            withdrawStartTime = LocalDateTime.parse(dto.getWithdrawStartTime(), QUERY_TIME_FORMATTER);
+            withdrawEndTime = LocalDateTime.parse(dto.getWithdrawEndTime(), QUERY_TIME_FORMATTER);
+            statisticsStartTime = LocalDateTime.parse(dto.getStatisticsStartTime(), QUERY_TIME_FORMATTER);
+            statisticsEndTime = LocalDateTime.parse(dto.getStatisticsEndTime(), QUERY_TIME_FORMATTER);
+        } catch (DateTimeParseException error) {
+            throw new ServiceException("提现时间和统计时间格式错误，请使用yyyy-MM-dd HH:mm:ss", error);
+        }
+        if (withdrawEndTime.isBefore(withdrawStartTime)) {
+            throw new ServiceException("提现结束时间不能早于提现开始时间");
+        }
+        if (statisticsEndTime.isBefore(statisticsStartTime)) {
+            throw new ServiceException("统计结束时间不能早于统计开始时间");
+        }
+
+        long startedAt = System.currentTimeMillis();
+        List<Long> userIds;
+        try {
+            userIds = jdbcTemplate.query(
+                    WITHDRAW_USER_SQL,
+                    (resultSet, rowNum) -> resultSet.getLong("user_id"),
+                    withdrawStartTime,
+                    withdrawEndTime
+            );
+        } catch (DataAccessException error) {
+            throw new ServiceException("查询提现用户失败，error=" + error.getMessage(), error);
+        }
+        long esStartedAt = System.currentTimeMillis();
+        if (userIds.isEmpty()) {
+            log.info("===> ES-Search withdraw diamond analysis. withdrawStartTime={}, withdrawEndTime={}, "
+                            + "statisticsStartTime={}, statisticsEndTime={}, excludeBusinessTypes={}, "
+                            + "userCount=0, userBatchCount=0, aggregationBucketCount=0, mysqlCostMs={}, "
+                            + "esCostMs=0, totalCostMs={}",
+                    dto.getWithdrawStartTime(), dto.getWithdrawEndTime(),
+                    dto.getStatisticsStartTime(), dto.getStatisticsEndTime(),
+                    dto.getExcludeBusinessTypes(),
+                    esStartedAt - startedAt, esStartedAt - startedAt);
+            return List.of();
+        }
+
+        List<String> indices = EsSearchUtil.getIndices(
+                EsIndexAlias.SANO_WALLET_DIAMOND_RECORD,
+                dto.getStatisticsStartTime(),
+                dto.getStatisticsEndTime()
+        );
+        List<Map<String, CompositeAggregationSource>> compositeSources = List.of(
+                Map.of("userId", CompositeAggregationSource.of(
+                        source -> source.terms(terms -> terms.field("user_id")))),
+                Map.of("status", CompositeAggregationSource.of(
+                        source -> source.terms(terms -> terms.field("status")))),
+                Map.of("businessType", CompositeAggregationSource.of(
+                        source -> source.terms(terms -> terms.field("business_type"))))
+        );
+        List<WithdrawDiamondAnalysisVO> result = new ArrayList<>();
+
+        try {
+            for (int fromIndex = 0; fromIndex < userIds.size(); fromIndex += USER_BATCH_SIZE) {
+                List<Long> batchUserIds = userIds.subList(
+                        fromIndex,
+                        Math.min(fromIndex + USER_BATCH_SIZE, userIds.size())
+                );
+                Map<String, FieldValue> afterKey = null;
+                do {
+                    Map<String, FieldValue> requestAfterKey = afterKey;
+                    BoolQuery.Builder queryBuilder = new BoolQuery.Builder()
+                            .filter(EsSearchUtil.getTermsOr("user_id", batchUserIds))
+                            .filter(EsSearchUtil.getTermsOr(
+                                    "status",
+                                    List.of(INCOME_STATUS, EXPENSE_STATUS)
+                            ));
+                    // 排除指定的业务类型，避免统计钻石流水时包含不需要的记录。
+                    if (dto.getExcludeBusinessTypes() != null && !dto.getExcludeBusinessTypes().isEmpty()) {
+                        queryBuilder.mustNot(EsSearchUtil.getTermsOr(
+                                "business_type",
+                                dto.getExcludeBusinessTypes()
+                        ));
+                    }
+                    EsSearchUtil.setDateEQ(
+                            queryBuilder,
+                            "create_time",
+                            TimeUtils.BASIC,
+                            dto.getStatisticsStartTime(),
+                            dto.getStatisticsEndTime()
+                    );
+
+                    SearchResponse<Void> response = client.search(search -> search
+                                    .index(indices)
+                                    .ignoreUnavailable(true)
+                                    .size(0)
+                                    .query(queryBuilder.build()._toQuery())
+                                    .aggregations("user_status_business", aggregation -> aggregation
+                                            .composite(composite -> {
+                                                composite
+                                                        .size(COMPOSITE_PAGE_SIZE)
+                                                        .sources(compositeSources);
+                                                if (requestAfterKey != null) {
+                                                    composite.after(requestAfterKey);
+                                                }
+                                                return composite;
+                                            })
+                                            .aggregations("total_tokens", total -> total
+                                                    .sum(sum -> sum.field("tokens")))),
+                            Void.class
+                    );
+                    if (response.timedOut() || response.shards().failed().intValue() > 0) {
+                        throw new ServiceException("ES提现用户钻石统计未完整执行，timedOut="
+                                + response.timedOut() + ", failedShards=" + response.shards().failed());
+                    }
+
+                    var composite = response.aggregations()
+                            .get("user_status_business")
+                            .composite();
+                    List<CompositeBucket> buckets = composite.buckets().array();
+                    for (CompositeBucket bucket : buckets) {
+                        long userId = bucket.key().get("userId").longValue();
+                        int status = (int) bucket.key().get("status").longValue();
+                        int businessType = (int) bucket.key().get("businessType").longValue();
+                        long tokens = Math.round(
+                                bucket.aggregations().get("total_tokens").sum().value()
+                        );
+                        result.add(new WithdrawDiamondAnalysisVO(
+                                userId,
+                                status,
+                                businessType,
+                                tokens
+                        ));
+                    }
+                    afterKey = composite.afterKey();
+                } while (afterKey != null && !afterKey.isEmpty());
+            }
+        } catch (IOException | ElasticsearchException error) {
+            log.error("ES withdraw diamond analysis failed, indices={}, withdrawStartTime={}, "
+                            + "withdrawEndTime={}, statisticsStartTime={}, statisticsEndTime={}, "
+                            + "excludeBusinessTypes={}, userCount={}, completedBucketCount={}, "
+                            + "esCostMs={}, error={}",
+                    indices, dto.getWithdrawStartTime(), dto.getWithdrawEndTime(),
+                    dto.getStatisticsStartTime(), dto.getStatisticsEndTime(),
+                    dto.getExcludeBusinessTypes(), userIds.size(),
+                    result.size(), System.currentTimeMillis() - esStartedAt,
+                    error.getMessage(), error);
+            throw new ServiceException("查询提现用户钻石来源和用途失败，error=" + error.getMessage(), error);
+        }
+
+        // 输出顺序固定为用户ID、加余额优先、业务类型，便于直接导出表格和人工核对。
+        result.sort((left, right) -> {
+            int userOrder = Long.compare(left.userId(), right.userId());
+            if (userOrder != 0) {
+                return userOrder;
+            }
+            int statusOrder = Integer.compare(right.status(), left.status());
+            return statusOrder != 0
+                    ? statusOrder
+                    : Integer.compare(left.businessType(), right.businessType());
+        });
+
+        long completedAt = System.currentTimeMillis();
+        log.info("===> ES-Search withdraw diamond analysis. withdrawStartTime={}, withdrawEndTime={}, "
+                        + "statisticsStartTime={}, statisticsEndTime={}, excludeBusinessTypes={}, "
+                        + "userCount={}, userBatchCount={}, aggregationBucketCount={}, mysqlCostMs={}, "
+                        + "esCostMs={}, totalCostMs={}",
+                dto.getWithdrawStartTime(), dto.getWithdrawEndTime(),
+                dto.getStatisticsStartTime(), dto.getStatisticsEndTime(),
+                dto.getExcludeBusinessTypes(), userIds.size(),
+                (userIds.size() + USER_BATCH_SIZE - 1) / USER_BATCH_SIZE,
+                result.size(), esStartedAt - startedAt, completedAt - esStartedAt,
+                completedAt - startedAt);
         return result;
     }
 

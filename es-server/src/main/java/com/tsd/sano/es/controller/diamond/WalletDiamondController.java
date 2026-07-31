@@ -4,8 +4,10 @@ import com.tsd.sano.es.controller.diamond.dto.AppDiamondRecordDTO;
 import com.tsd.sano.es.controller.diamond.dto.DiamondIncomeDistributionDTO;
 import com.tsd.sano.es.controller.diamond.dto.SatDiamond7DayDTO;
 import com.tsd.sano.es.controller.diamond.dto.SearchDiamondRecordDTO;
+import com.tsd.sano.es.controller.diamond.dto.WithdrawDiamondAnalysisDTO;
 import com.tsd.sano.es.controller.diamond.vo.DiamondIncomeRangeVO;
 import com.tsd.sano.es.controller.diamond.vo.DiamondRecordVO;
+import com.tsd.sano.es.controller.diamond.vo.WithdrawDiamondAnalysisVO;
 import com.tsd.sano.es.core.result.ResultVO;
 import com.tsd.sano.es.modules.search.service.WalletDiamondRecordSearch;
 import lombok.RequiredArgsConstructor;
@@ -109,6 +111,18 @@ public class WalletDiamondController {
     public ResultVO<List<DiamondIncomeRangeVO>> incomeDistribution(
             @RequestBody DiamondIncomeDistributionDTO dto) {
         return ResultVO.success(walletDiamondRecordSearch.incomeDistribution(dto));
+    }
+
+    /**
+     * 统计指定提现用户在独立时间范围内的钻石来源和用途。
+     *
+     * @param dto 提现用户筛选时间和钻石统计时间
+     * @return 用户、余额变化方向和业务类型组成的扁平汇总明细
+     */
+    @PostMapping("/withdrawAnalysis")
+    public ResultVO<List<WithdrawDiamondAnalysisVO>> withdrawAnalysis(
+            @RequestBody WithdrawDiamondAnalysisDTO dto) {
+        return ResultVO.success(walletDiamondRecordSearch.withdrawAnalysis(dto));
     }
 
 }

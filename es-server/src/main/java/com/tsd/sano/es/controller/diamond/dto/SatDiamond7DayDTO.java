@@ -23,4 +23,9 @@ public class SatDiamond7DayDTO {
      * 结束时间，格式：yyyy-MM-dd HH:mm:ss。
      */
     private String endTime;
+
+    /**
+     * 是否统计74业务收入（新人奖励），true表示统计，false表示不统计。
+     */
+    private boolean sta74 = false;
 }
