@@ -7,9 +7,7 @@
     <!-- 日志根目录，生产环境建议通过 LOG_DIR 挂载到容器外部目录。 -->
     <springProperty scope="context" name="LOG_DIR" source="logging.file.path" defaultValue="logs"/>
 
-    <!-- 每天一个日期目录，例如 logs/20260630/es-server.log。 -->
-    <timestamp key="LOG_DATE" datePattern="yyyyMMdd"/>
-    <property name="LOG_DAY_DIR" value="${LOG_DIR}/${LOG_DATE}"/>
+    <!-- 不设置固定活动文件路径，由fileNamePattern按照容器/JVM当前日期创建每日目录和日志文件。 -->
 
     <!-- 滚动策略参数，由不同环境的 yml 分别控制。 -->
     <springProperty scope="context" name="MAX_FILE_SIZE" source="sano.log.max-file-size" defaultValue="100MB"/>
@@ -31,7 +29,6 @@
 
     <!-- ===================== 全量文件日志 ===================== -->
     <appender name="FILE" class="ch.qos.logback.core.rolling.RollingFileAppender">
-        <file>${LOG_DAY_DIR}/${APP_NAME}.log</file>
         <rollingPolicy class="ch.qos.logback.core.rolling.SizeAndTimeBasedRollingPolicy">
             <fileNamePattern>${LOG_DIR}/%d{yyyyMMdd}/${APP_NAME}.%i.log.gz</fileNamePattern>
             <maxFileSize>${MAX_FILE_SIZE}</maxFileSize>
@@ -46,7 +43,6 @@
 
     <!-- ===================== 错误文件日志 ===================== -->
     <appender name="ERROR_FILE" class="ch.qos.logback.core.rolling.RollingFileAppender">
-        <file>${LOG_DAY_DIR}/${APP_NAME}-error.log</file>
         <filter class="ch.qos.logback.classic.filter.LevelFilter">
             <level>ERROR</level>
             <onMatch>ACCEPT</onMatch>
@@ -66,7 +62,6 @@
 
     <!-- ===================== ES导入专项日志 ===================== -->
     <appender name="IMPORT_FILE" class="ch.qos.logback.core.rolling.RollingFileAppender">
-        <file>${LOG_DAY_DIR}/${APP_NAME}-import.log</file>
         <rollingPolicy class="ch.qos.logback.core.rolling.SizeAndTimeBasedRollingPolicy">
             <fileNamePattern>${LOG_DIR}/%d{yyyyMMdd}/${APP_NAME}-import.%i.log.gz</fileNamePattern>
             <maxFileSize>${MAX_FILE_SIZE}</maxFileSize>
@@ -81,7 +76,6 @@
 
     <!-- ===================== ES导入失败ID专项日志 ===================== -->
     <appender name="IMPORT_ERROR_FILE" class="ch.qos.logback.core.rolling.RollingFileAppender">
-        <file>${LOG_DAY_DIR}/${APP_NAME}-import-error.log</file>
         <rollingPolicy class="ch.qos.logback.core.rolling.SizeAndTimeBasedRollingPolicy">
             <fileNamePattern>${LOG_DIR}/%d{yyyyMMdd}/${APP_NAME}-import-error.%i.log.gz</fileNamePattern>
             <maxFileSize>${MAX_FILE_SIZE}</maxFileSize>
@@ -96,7 +90,6 @@
 
     <!-- ===================== Polling同步专项日志 ===================== -->
     <appender name="POLLING_FILE" class="ch.qos.logback.core.rolling.RollingFileAppender">
-        <file>${LOG_DAY_DIR}/${APP_NAME}-polling.log</file>
         <rollingPolicy class="ch.qos.logback.core.rolling.SizeAndTimeBasedRollingPolicy">
             <fileNamePattern>${LOG_DIR}/%d{yyyyMMdd}/${APP_NAME}-polling.%i.log.gz</fileNamePattern>
             <maxFileSize>${MAX_FILE_SIZE}</maxFileSize>
@@ -111,7 +104,6 @@
 
     <!-- Polling ERROR独立保存；同一错误仍保留在应用Polling日志中，便于按完整调用链排查。 -->
     <appender name="POLLING_ERROR_FILE" class="ch.qos.logback.core.rolling.RollingFileAppender">
-        <file>${LOG_DAY_DIR}/${APP_NAME}-polling-error.log</file>
         <filter class="ch.qos.logback.classic.filter.LevelFilter">
             <level>ERROR</level>
             <onMatch>ACCEPT</onMatch>
@@ -131,7 +123,6 @@
 
     <!-- ===================== 查询API专项日志 ===================== -->
     <appender name="SEARCH_API_FILE" class="ch.qos.logback.core.rolling.RollingFileAppender">
-        <file>${LOG_DAY_DIR}/${APP_NAME}-search-api.log</file>
         <rollingPolicy class="ch.qos.logback.core.rolling.SizeAndTimeBasedRollingPolicy">
             <fileNamePattern>${LOG_DIR}/%d{yyyyMMdd}/${APP_NAME}-search-api.%i.log.gz</fileNamePattern>
             <maxFileSize>${MAX_FILE_SIZE}</maxFileSize>
