@@ -2,7 +2,9 @@
 
 ## 1. 文档范围
 
-本文档以当前 `es-server` 源码、`application-dev.yml`、`application-test.yml`、`application-prod.yml`、Docker Compose、Nginx 和部署脚本为准，只描述已经实现的功能。
+> 与源码核对日期：2026-08-05。
+
+本文档以当前 `es-server` 源码、`application-dev.yml`、`application-develop.yml`、`application-test.yml`、`application-prod.yml`、Docker Compose、Nginx 和部署脚本为准，只描述已经实现的功能。
 
 当前系统支持：
 
@@ -62,6 +64,8 @@ sano:
 
 所有 Bean 在两种模式下都会注册。`query` 不是缺少执行器或同步组件，而是在调度入口、人工入口和底层导入服务处通过 `EsServiceModeManager` 禁止同步能力。
 
+当前 `dev`、`develop` 配置默认使用 `query`；测试和正式常驻容器使用 `all`，安全升级期间的临时容器固定使用 `query`。
+
 ### 2.4 代码模块
 
 `com.tsd.sano.es` 下的 `core`、`controller`、`modules` 相互平行：
@@ -103,7 +107,7 @@ sano:
 | 配置 | 当前默认值 | 作用 |
 | --- | ---: | --- |
 | `drain-timeout-seconds` | `600` | 应用关闭、人工暂停或部署 drain 的等待上限 |
-| `global-bulk-concurrency` | `3` | T+1 与 Polling 合计在途 ES Bulk 上限 |
+| `global-bulk-concurrency` | Java及测试默认 `3`；正式默认 `5` | T+1 与 Polling 合计在途 ES Bulk 上限 |
 | `polling-reserved-concurrency` | `2` | Polling 有等待请求时为其保留的额度 |
 | `t-plus-one-max-concurrency` | `3` | Polling 无等待请求时 T+1 可使用的最大额度 |
 
@@ -118,15 +122,15 @@ T+1 配置包括：
 - `queue-max-bytes`，只约束T+1排队、在途和重试批次的估算内存。
 - Bulk 文档数、目标大小、重试次数和间隔。
 - 允许失败文档数、失败率。
-- 导入监控、Refresh 和副本调整开关。
+- Refresh 和副本调整开关。
 
-测试环境 Cron 为每天 `02:30`，正式环境为每天 `03:00`。测试环境单轮最大运行 5 分钟，正式环境为 480 分钟。
+测试环境 Cron 为每天 `02:30`，正式环境为每天 `01:30`。测试环境单轮最大运行 5 分钟，正式环境为 480 分钟。
 
 ### 3.3 Polling 配置
 
 | 配置 | 当前默认值 | 作用 |
 | --- | ---: | --- |
-| `enabled` | Java 默认 `false`；Docker 主实例覆盖为 `true` | 是否启动 Polling |
+| `enabled` | Java 默认 `false`；测试主实例覆盖为 `true`，正式主实例保持 `false` | 是否启动 Polling |
 | `max-active-tables` | `5` | 单实例最多并行运行的 Polling 表数 |
 | `poll-interval` | `5s` | 协调器扫描间隔、历史日期关闭前轮询间隔及 checkpoint 持久化重试间隔 |
 | `date-close-delay` | `10m` | 次日零点后继续接收旧日期晚到数据的时间 |
@@ -134,7 +138,7 @@ T+1 配置包括：
 | `bulk-retry-times` | `2` | ES 整批失败后的重试次数，不含首次 |
 | `bulk-retry-interval` | `1s` | Polling 整批重试等待时间 |
 
-Docker Compose 中常驻 `all` 实例将 `SANO_ES_POLLING_ENABLED` 默认设为 `true`；临时 `query` 实例固定为 `false`。
+测试环境 Docker Compose 中常驻 `all` 实例将 `SANO_ES_POLLING_ENABLED` 默认设为 `true`；正式环境常驻 `all` 实例默认设为 `false`。两套环境的临时 `query` 实例均固定为 `false`。
 
 ### 3.4 单表配置
 
@@ -162,14 +166,18 @@ Docker Compose 中常驻 `all` 实例将 `SANO_ES_POLLING_ENABLED` 默认设为 
 - `sync-mode` 为空时默认 `T_PLUS_ONE`。
 - `dt-column-type` 只支持 `DATE` 和 `DATETIME`。
 - Polling 表必须设置 `bootstrap-start-date`。
-- `reserve-days` 不能为负数。
+- `delete-history-index=true` 时，`reserve-days` 必须大于 0。
 - 加载完成后分别形成只读的 T+1 表集合和 Polling 表集合。
 
-当前测试和正式配置中：
+当前测试配置中：
 
 - `sano_wallet_coin_record` 为 `polling`，首次日期为 `2026-07-27`。
 - `sano_wallet_diamond_record`、`sano_wallet_lucky_diamond_record_10m`、`sano_game_record` 为 `t-plus-one`。
-- 测试环境保留 30 天；正式环境保留 60 天。
+- 所有表保留 30 天。
+
+当前正式配置关闭 Polling 总开关，四张启用表均为 `t-plus-one`，历史索引保留 60 天。金币表仍保留 `bootstrap-start-date=2026-07-29`，但 T+1 模式不会读取该字段；以后重新切换为 Polling 前必须结合实际 checkpoint 和目标日期重新确认。
+
+测试和正式配置中的四张启用表当前均设置 `reconcile=true`；T+1 成功后都会异步提交统计对账，测试环境金币表在 Polling 日期关闭时提交对账。
 
 ## 4. 应用启动流程
 
@@ -563,9 +571,9 @@ Polling 使用 `JdbcTemplate.queryForList` 同步等待 MySQL 返回，不设置
 
 这是当前实现的明确业务规则。失败区间不会由 Polling 自动回读；日期关闭后的统计对账用于发现差异，运维再通过人工 T+1 覆盖修复接口补齐。
 
-### 6.4 循环日志
+### 6.4 循环日志与低频汇总
 
-每轮统一生成一条 `DEBUG` 日志：
+每轮同步仍生成一条 `DEBUG` 日志：
 
 ```text
 ES-Polling cycle completed. table=..., date=..., size=...,
@@ -581,6 +589,22 @@ totalCostMs=..., result=...
 
 正常 MySQL 读取和正常 Bulk 不再分别打印重复的完成日志。开发和测试环境开启 Polling
 `DEBUG`，可以查看逐轮详情；生产环境保持 `INFO`，不输出这些高频日志。
+
+每个 Worker 同时持有一个 `PollingLogSummary`，按固定五分钟窗口累计循环数、空查询数、
+MySQL 行数、ES 成功/失败行数、游标范围、平均/最大耗时和成功吞吐，并输出一条 `INFO`
+汇总日志：
+
+```text
+ES-Polling summary. reason=INTERVAL, table=..., date=...,
+windowSeconds=..., cycles=..., successBatches=..., emptyCycles=...,
+mysqlRows=..., esSuccessRows=..., esFailedRows=..., bulkFailedBatches=...,
+startLastId=..., endLastId=..., mysqlAvgMs=..., mysqlMaxMs=...,
+esAvgMs=..., esMaxMs=..., totalAvgMs=..., successRowsPerSecond=...
+```
+
+跨日期、日期关闭和 Worker 停止时会立即输出尚未结束的窗口。窗口中存在 ES 失败行时使用
+`WARN`，否则使用 `INFO`。该汇总器只负责旁路日志统计，内部异常会丢弃并重置窗口，不参与
+checkpoint、日期推进、Bulk 重试、Worker 状态、drain 或对账判断。
 
 协调器和 Worker 启停、日期推进、checkpoint 初始化与恢复等低频生命周期事件保留
 `INFO`。仍会继续执行的重试记录为 `WARN`，重试耗尽、Worker暂停和不可恢复失败记录为
@@ -858,15 +882,17 @@ drain 结果可以为 `DRAINED`、`DRAINED_WITH_ERRORS`、`FAILED` 或 `IN_PROGR
 
 ## 15. 日志与通知
 
-日志按 `${LOG_DIR}/yyyyMMdd` 保存，当前包括：
+日志按容器/JVM当前日期保存到 `${LOG_DIR}/yyyyMMdd`。Appender 不设置固定活动文件，日期变化后由
+`fileNamePattern` 自动切换目录；活动文件包含从 `0` 开始的分片序号，滚动完成的分片压缩为
+`.log.gz`。当前文件类型包括：
 
-- `${APP_NAME}.log`
-- `${APP_NAME}-error.log`
-- `${APP_NAME}-import.log`
-- `${APP_NAME}-import-error.log`
-- `${APP_NAME}-polling.log`
-- `${APP_NAME}-polling-error.log`
-- `${APP_NAME}-search-api.log`
+- `${APP_NAME}.<序号>.log`
+- `${APP_NAME}-error.<序号>.log`
+- `${APP_NAME}-import.<序号>.log`
+- `${APP_NAME}-import-error.<序号>.log`
+- `${APP_NAME}-polling.<序号>.log`
+- `${APP_NAME}-polling-error.<序号>.log`
+- `${APP_NAME}-search-api.<序号>.log`
 
 `modules.tplusone`、`modules.polling` 和 `modules.search` 的日志分别写入对应专项文件，并继续传递到应用总日志。T+1 显式失败 ID 同时进入导入错误文件；Polling ERROR 同时进入 Polling 错误文件和应用错误日志。
 

@@ -2,6 +2,8 @@
 
 ## 1. 文档范围和默认前提
 
+> 与源码核对日期：2026-08-05。
+
 本文档以当前项目中的以下文件为准：
 
 ```text
@@ -14,6 +16,9 @@ es-server/deploy-es-server.sh
 es-server/deploy-es-server-test.sh
 es-server/nginx/es-server.conf.example
 es-server/nginx/es-server-test.conf.example
+es-server/src/main/resources/application-test.yml
+es-server/src/main/resources/application-prod.yml
+es-server/src/main/resources/logback-spring.xml
 ```
 
 本文档固定按以下顺序说明：
@@ -63,7 +68,15 @@ es-server/nginx/es-server-test.conf.example
 
 ### 2.3 服务模式
 
-常驻实例：
+正式常驻实例：
+
+```text
+SANO_SERVER_MODE=all
+SANO_ES_IMPORT_T_PLUS_ONE_ENABLED=true
+SANO_ES_POLLING_ENABLED=false
+```
+
+测试常驻实例：
 
 ```text
 SANO_SERVER_MODE=all
@@ -353,6 +366,9 @@ sano_sync_polling_checkpoint
 sano_wallet_coin_record
 sano_wallet_diamond_record
 ```
+
+`sano_sync_polling_checkpoint` 是当前测试环境启用 Polling 时的必需索引。正式环境默认关闭
+Polling，且全部启用表均为 T+1，因此首次正式部署不要求创建该索引。
 
 ## 5. 安装 Nginx 配置
 
@@ -709,9 +725,12 @@ curl -fsS -u 'elastic:es2peter' \
 table_name=sano_wallet_coin_record
 index_alias=sano_wallet_coin_record
 status=RUNNING
-sync_date=2026-07-27
+sync_date不早于2026-07-27
 last_id>=0
 ```
+
+Worker启动后会立即追赶历史日期，因此检查时 `sync_date` 可能已经晚于首次日期，不应要求它仍然
+固定等于 `2026-07-27`。
 
 检查容器：
 
@@ -738,7 +757,8 @@ curl -fsS -H "token: ${TOKEN}" \
 
 ## 7. 正式环境第一次部署：新服务器、空 ES
 
-正式环境步骤与测试环境一致，但必须使用正式目录、端口、Compose 文件和 ES。
+正式环境使用正式目录、端口、Compose 文件和 ES。当前正式 Compose 默认关闭 Polling，四张启用表
+均为 T+1，因此首次部署不创建 Polling checkpoint，也不需要为了重新触发 Polling 协调器而重启。
 
 第一次不要执行：
 
@@ -799,7 +819,7 @@ curl -fsS http://127.0.0.1:8002/health
 
 预期返回 `OK`。此时 `/ready` 返回 HTTP 503 属于预期结果。
 
-### 7.4 创建两个同步内部索引
+### 7.4 创建 T+1 任务索引
 
 ```bash
 TOKEN='sano-es-Z1q7n2V4m8K5x9P3d6R0h4T8w2Y7c1F'
@@ -808,20 +828,19 @@ curl -fsS -H "token: ${TOKEN}" \
   http://127.0.0.1:8002/import/createImportTaskIndex \
   | jq .
 
-curl -fsS -H "token: ${TOKEN}" \
-  http://127.0.0.1:8002/import/createSyncInternalIndices \
-  | jq .
-
 curl -fsS -u 'elastic:es2peter' \
-  'http://127.0.0.1:9201/_cat/indices/sano_import_task,sano_sync_polling_checkpoint?v'
+  'http://127.0.0.1:9201/_cat/indices/sano_import_task?v'
 ```
+
+当前正式环境的 `/ready` 不检查 `sano_sync_polling_checkpoint`。只有以后明确把正式表切换为
+Polling 并开启总开关时，才按照测试环境首次初始化流程创建 checkpoint 索引并重启主容器。
 
 ### 7.5 生成严格就绪需要的第一个业务 Alias
 
-正式配置的 `/ready` 同样优先检查：
+正式配置中金币表已经切换为 T+1，并且位于 T+1 表集合首位，因此 `/ready` 优先检查：
 
 ```text
-sano_wallet_diamond_record
+sano_wallet_coin_record
 ```
 
 选择一个 MySQL 确认有数据的日期。以下以 `20260726` 为例：
@@ -831,7 +850,7 @@ TOKEN='sano-es-Z1q7n2V4m8K5x9P3d6R0h4T8w2Y7c1F'
 IMPORT_DATE='20260726'
 
 curl -fsS -H "token: ${TOKEN}" \
-  "http://127.0.0.1:8002/import/importTableDateRange?tableName=sano_wallet_diamond_record&startDate=${IMPORT_DATE}&endDate=${IMPORT_DATE}" \
+  "http://127.0.0.1:8002/import/importTableDateRange?tableName=sano_wallet_coin_record&startDate=${IMPORT_DATE}&endDate=${IMPORT_DATE}" \
   | jq .
 ```
 
@@ -839,7 +858,7 @@ curl -fsS -H "token: ${TOKEN}" \
 
 ```bash
 IMPORT_DATE='20260726'
-TASK_ID="sano_wallet_diamond_record_${IMPORT_DATE}"
+TASK_ID="sano_wallet_coin_record_${IMPORT_DATE}"
 
 curl -fsS -u 'elastic:es2peter' \
   "http://127.0.0.1:9201/sano_import_task/_doc/${TASK_ID}" \
@@ -860,11 +879,11 @@ docker logs -f sano-es-server
 IMPORT_DATE='20260726'
 
 curl -fsS -u 'elastic:es2peter' \
-  "http://127.0.0.1:9201/sano_wallet_diamond_record_${IMPORT_DATE}" \
+  "http://127.0.0.1:9201/sano_wallet_coin_record_${IMPORT_DATE}" \
   | jq .
 
 curl -fsS -u 'elastic:es2peter' \
-  'http://127.0.0.1:9201/_alias/sano_wallet_diamond_record' \
+  'http://127.0.0.1:9201/_alias/sano_wallet_coin_record' \
   | jq .
 ```
 
@@ -887,16 +906,11 @@ dispatcherActive=false
 activeTask=false
 ```
 
-### 7.7 重启容器，初始化 Polling checkpoint
+### 7.7 确认无需重启和 Polling 初始化
 
-```bash
-docker restart sano-es-server
-
-until curl -fsS http://127.0.0.1:8002/health >/dev/null; do
-  sleep 2
-done
-curl -fsS http://127.0.0.1:8002/health
-```
+当前正式环境 Polling 总开关关闭，`PollingCoordinator` 状态为 `DISABLED`。创建
+`sano_import_task` 并成功生成严格就绪所需的业务 Alias 后，当前进程即可通过 `/ready`，不需要
+创建 checkpoint 或重启容器。
 
 ### 7.8 正式环境第一次部署严格检查
 
@@ -924,13 +938,11 @@ curl -fsS -H "token: ${TOKEN}" \
   http://127.0.0.1:8002/internal/sync/status \
   | jq .
 
-curl -fsS -u 'elastic:es2peter' \
-  'http://127.0.0.1:9201/sano_sync_polling_checkpoint/_doc/sano_wallet_coin_record' \
-  | jq '._source'
-
 docker inspect sano-es-server \
   --format 'image={{.Config.Image}} status={{.State.Status}} health={{if .State.Health}}{{.State.Health.Status}}{{else}}none{{end}} restart={{.RestartCount}}'
 ```
+
+同步状态中应显示正式环境 Polling 已禁用，且不应要求存在 Polling Worker 或 checkpoint。
 
 检查 Nginx：
 
@@ -997,15 +1009,22 @@ curl -fsS -u 'elastic:es2peter' \
   'http://127.0.0.1:9211/_cat/aliases/sano_*?v&s=alias,index'
 ```
 
-至少应存在：
+正式环境至少应存在：
 
 ```text
 sano_import_task
+sano_wallet_coin_record_导入日期
+sano_wallet_coin_record Alias
+```
+
+测试环境启用 Polling，还应存在：
+
+```text
 sano_sync_polling_checkpoint
-sano_wallet_diamond_record_导入日期
-sano_wallet_diamond_record Alias
 sano_wallet_coin_record_20260727
 sano_wallet_coin_record Alias
+sano_wallet_diamond_record_导入日期
+sano_wallet_diamond_record Alias
 ```
 
 ### 8.3 Polling 日志
@@ -1016,25 +1035,34 @@ sano_wallet_coin_record Alias
 cd /home/ec2-user/datahub-test/es-server
 DAY=$(date +%Y%m%d)
 ls -lh "logs-test/${DAY}"
-tail -n 200 "logs-test/${DAY}/es-server-polling.log"
-tail -n 200 "logs-test/${DAY}/es-server-polling-error.log"
+tail -n 200 logs-test/${DAY}/es-server-polling.*.log
+
+# 没有ERROR时，polling-error活动文件可能尚未创建。
+find "logs-test/${DAY}" -maxdepth 1 -type f \
+  -name 'es-server-polling-error.*.log' \
+  -exec tail -n 200 {} +
 ```
 
-正式：
+正式环境当前关闭 Polling，且没有 Polling 表，正常情况下不会生成 Polling Worker 运行日志。以后将
+至少一张表切换为 Polling 并明确开启总开关后，使用：
 
 ```bash
 cd /home/ec2-user/datahub/es-server
 DAY=$(date +%Y%m%d)
 ls -lh "logs/${DAY}"
-tail -n 200 "logs/${DAY}/es-server-polling.log"
-tail -n 200 "logs/${DAY}/es-server-polling-error.log"
+tail -n 200 logs/${DAY}/es-server-polling.*.log
+
+find "logs/${DAY}" -maxdepth 1 -type f \
+  -name 'es-server-polling-error.*.log' \
+  -exec tail -n 200 {} +
 ```
 
-正常运行时应能看到：
+测试环境正常运行时应能看到低频生命周期、五分钟汇总以及 `DEBUG` 逐轮日志：
 
 ```text
 ES-Polling coordinator started
 ES-Polling worker started
+ES-Polling summary
 ES-Polling cycle completed
 ```
 
@@ -1503,17 +1531,21 @@ ES_SERVER_IMAGE_TAG=v1.0.10 DEPLOY_MODE=safe NGINX_HANDOFF_PRECONFIGURED=true ./
 /home/ec2-user/datahub/es-server/logs-query
 ```
 
-当天主要日志：
+日志由 `fileNamePattern` 按容器/JVM当前日期写入当天目录。活动文件包含从 `0` 开始的分片
+序号，超过大小或跨日后的历史分片压缩为 `.log.gz`。当天主要活动日志模式为：
 
 ```text
-es-server.log
-es-server-error.log
-es-server-import.log
-es-server-import-error.log
-es-server-polling.log
-es-server-polling-error.log
-es-server-search-api.log
+es-server.<序号>.log
+es-server-error.<序号>.log
+es-server-import.<序号>.log
+es-server-import-error.<序号>.log
+es-server-polling.<序号>.log
+es-server-polling-error.<序号>.log
+es-server-search-api.<序号>.log
 ```
+
+某类日志没有事件时，对应活动文件可能尚未创建。应用跨日运行时会直接切换到新的日期目录，
+不再继续写入容器启动日期目录。
 
 ## 16. 常见问题
 
@@ -1524,14 +1556,19 @@ es-server-search-api.log
 ```text
 sano_import_task
 sano_sync_polling_checkpoint
-sano_wallet_diamond_record Alias
+首张T+1表的业务Alias
 ```
 
-而 `/ready` 会检查这些内容。部署脚本无法在 `/ready` 通过前调用初始化接口，所以第一次必须直接 Compose 启动。
+测试环境启用 Polling，因此 `/ready` 会检查上述全部内容；正式环境当前关闭 Polling，不检查
+`sano_sync_polling_checkpoint`，但仍要求 T+1 任务索引和首张 T+1 业务 Alias。测试环境首张
+T+1 表是钻石表，正式环境首张 T+1 表是金币表。部署脚本无法在 `/ready` 通过前调用初始化
+接口，所以两套环境第一次都必须直接使用 Compose 启动。
 
-### 16.2 创建 checkpoint 索引后为什么必须重启
+### 16.2 测试环境创建 checkpoint 索引后为什么必须重启
 
-Polling 协调器只在 `ApplicationReadyEvent` 时自动启动。第一次启动发现 checkpoint 索引缺失后进入 `INITIALIZATION_FAILED`，创建索引不会自动重放该事件。
+Polling 协调器只在 `ApplicationReadyEvent` 时自动启动。测试环境第一次启动发现 checkpoint 索引
+缺失后进入 `INITIALIZATION_FAILED`，创建索引不会自动重放该事件，因此必须重启。正式环境当前
+关闭 Polling，不执行这一步。
 
 ### 16.3 T+1 任务成功但 Alias 仍不存在
 
@@ -1604,12 +1641,14 @@ ps -o pid,ppid,stat,etime,wchan:32,cmd -p "${DEPLOY_PID}"
 [ ] 使用 Compose 直接启动 all 容器
 [ ] /health 返回 OK
 [ ] 已创建 sano_import_task
-[ ] 已创建 sano_sync_polling_checkpoint
-[ ] 已通过有数据日期生成 sano_wallet_diamond_record Alias
+[ ] 测试环境已通过有数据日期生成 sano_wallet_diamond_record Alias
+[ ] 正式环境已通过有数据日期生成 sano_wallet_coin_record Alias
 [ ] T+1 dispatcher 已停止
-[ ] 已重启 all 容器
-[ ] Polling checkpoint 已初始化
-[ ] Polling Worker 已启动
+[ ] 测试环境已创建 sano_sync_polling_checkpoint
+[ ] 测试环境已重启 all 容器
+[ ] 测试环境 Polling checkpoint 已初始化
+[ ] 测试环境 Polling Worker 已启动
+[ ] 正式环境 Polling 状态为 DISABLED，且未要求 checkpoint
 [ ] /ready=true、serviceMode=ALL
 [ ] 外部域名和内部 Nginx 入口正常
 ```
