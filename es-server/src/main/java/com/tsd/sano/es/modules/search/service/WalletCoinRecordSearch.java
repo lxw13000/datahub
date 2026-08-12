@@ -120,7 +120,7 @@ public class WalletCoinRecordSearch {
             WeekStatVO stat = new WeekStatVO();
             stat.setConsumeUserCount(Math.round(aggregations.get("consume_user_count").cardinality().value()));
             stat.setConsumeTokens(Math.round(aggregations.get("consume_tokens").sum().value()));
-            stat.setLuckyGiftTokens(Math.round(aggregations.get("normal_gift").filter().aggregations().get("tokens").sum().value()));
+            stat.setNormalGiftTokens(Math.round(aggregations.get("normal_gift").filter().aggregations().get("tokens").sum().value()));
             stat.setLuckyGiftTokens(Math.round(aggregations.get("lucky_gift").filter().aggregations().get("tokens").sum().value()));
             stat.setGameTokens(Math.round(aggregations.get("game").filter().aggregations().get("tokens").sum().value()));
             log.info("===> ES-Search wallet coin week stat. indices={}, roomCount={}, startTime={}, endTime={}, esTookMs={}, timedOut={}, searchCostMs={}, stat={}",
