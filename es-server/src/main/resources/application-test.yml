@@ -120,7 +120,7 @@ sano:
 
     polling:
       # 测试环境默认启用Polling；需要临时停用时可通过环境变量覆盖。
-      enabled: ${SANO_ES_POLLING_ENABLED:true}
+      enabled: ${SANO_ES_POLLING_ENABLED:false}
       # 当前实例允许同时持有并运行的Polling表数量。
       max-active-tables: ${SANO_ES_POLLING_MAX_ACTIVE_TABLES:5}
       # 当前日期查询为空后再次轮询MySQL的等待时间。
@@ -146,7 +146,7 @@ sano:
         table-name: sano_wallet_coin_record
         mapping-file: sano_wallet_coin_record.json
         # 使用延迟轮询同步；首次没有checkpoint时从指定业务日期开始。
-        sync-mode: polling
+        sync-mode: t_plus_one
         bootstrap-start-date: 2026-07-27
         reconcile: true
         # 导入完成是否删除该表历史索引

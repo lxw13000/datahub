@@ -101,6 +101,10 @@ public class WalletCoinRecordSearch {
                 // 直播间消费总数：tokens累计流水。
                 .aggregations("consume_tokens", a -> a.sum(s -> s.field("tokens")))
                 // 直播间幸运礼物消费数：business_type=11时tokens累计流水。
+                .aggregations("normal_gift", a -> a
+                        .filter(EsSearchUtil.getTerm("business_type", 1))
+                        .aggregations("tokens", sub -> sub.sum(s -> s.field("tokens"))))
+                // 直播间幸运礼物消费数：business_type=11时tokens累计流水。
                 .aggregations("lucky_gift", a -> a
                         .filter(EsSearchUtil.getTerm("business_type", 11))
                         .aggregations("tokens", sub -> sub.sum(s -> s.field("tokens"))))
@@ -116,6 +120,7 @@ public class WalletCoinRecordSearch {
             WeekStatVO stat = new WeekStatVO();
             stat.setConsumeUserCount(Math.round(aggregations.get("consume_user_count").cardinality().value()));
             stat.setConsumeTokens(Math.round(aggregations.get("consume_tokens").sum().value()));
+            stat.setLuckyGiftTokens(Math.round(aggregations.get("normal_gift").filter().aggregations().get("tokens").sum().value()));
             stat.setLuckyGiftTokens(Math.round(aggregations.get("lucky_gift").filter().aggregations().get("tokens").sum().value()));
             stat.setGameTokens(Math.round(aggregations.get("game").filter().aggregations().get("tokens").sum().value()));
             log.info("===> ES-Search wallet coin week stat. indices={}, roomCount={}, startTime={}, endTime={}, esTookMs={}, timedOut={}, searchCostMs={}, stat={}",

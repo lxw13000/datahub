@@ -143,7 +143,7 @@ sano:
         table-name: sano_wallet_coin_record
         mapping-file: sano_wallet_coin_record.json
         # 开发环境先使用该表验证Polling主循环，其他表继续保持T+1。
-        sync-mode: polling
+        sync-mode: t-plus-one
         # 首次没有checkpoint时从该业务日期的最小ID开始同步。
         bootstrap-start-date: 2026-07-24
         reconcile: true

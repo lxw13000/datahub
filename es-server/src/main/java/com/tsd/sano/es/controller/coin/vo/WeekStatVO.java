@@ -17,7 +17,10 @@ public class WeekStatVO {
      * 消费总流水。
      */
     private long consumeTokens = 0L;
-
+    /**
+     * 普通礼物消费流水。
+     */
+    private long normalGiftTokens = 0L;
     /**
      * 幸运礼物消费流水。
      */

@@ -14,6 +14,11 @@ import java.util.List;
 public class WithdrawDiamondAnalysisDTO {
 
     /**
+     * 用户类型，1.注册用户，2提现用户。
+     */
+    private Integer userType = 2;
+
+    /**
      * 提现开始时间，格式为yyyy-MM-dd HH:mm:ss，包含该时间。
      */
     private String withdrawStartTime;
