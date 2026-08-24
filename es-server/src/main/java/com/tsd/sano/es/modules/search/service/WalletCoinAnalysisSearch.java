@@ -12,12 +12,14 @@ import co.elastic.clients.elasticsearch._types.query_dsl.BoolQuery;
 import co.elastic.clients.elasticsearch.core.SearchRequest;
 import co.elastic.clients.elasticsearch.core.SearchResponse;
 import co.elastic.clients.util.NamedValue;
-import com.tsd.sano.es.controller.coin.dto.UserCoinAnalysisDTO;
-import com.tsd.sano.es.controller.coin.vo.CoinConsumePropTopVO;
-import com.tsd.sano.es.controller.coin.vo.CoinConsumePropVO;
-import com.tsd.sano.es.controller.coin.vo.CoinConsumeTargetTopVO;
-import com.tsd.sano.es.controller.coin.vo.CoinConsumeTargetVO;
-import com.tsd.sano.es.controller.coin.vo.UserCoinDailyStatVO;
+import com.tsd.sano.es.controller.analysis.dto.RoomWalletAnalysisDTO;
+import com.tsd.sano.es.controller.analysis.dto.UserCoinAnalysisDTO;
+import com.tsd.sano.es.controller.analysis.vo.CoinConsumePropTopVO;
+import com.tsd.sano.es.controller.analysis.vo.CoinConsumePropVO;
+import com.tsd.sano.es.controller.analysis.vo.CoinConsumeTargetTopVO;
+import com.tsd.sano.es.controller.analysis.vo.CoinConsumeTargetVO;
+import com.tsd.sano.es.controller.analysis.vo.RoomCoinDailyConsumeStatVO;
+import com.tsd.sano.es.controller.analysis.vo.UserCoinDailyStatVO;
 import com.tsd.sano.es.core.exception.ServiceException;
 import com.tsd.sano.es.modules.search.EBusinessType;
 import com.tsd.sano.es.modules.search.constant.EsIndexAlias;
@@ -180,6 +182,92 @@ public class WalletCoinAnalysisSearch {
                     indices, dto.getUserId(), dto.getStartDate(), dto.getEndDate(),
                     System.currentTimeMillis() - searchStartedAt, error.getMessage(), error);
             throw new ServiceException("查询用户金币每日统计失败，error=" + error.getMessage(), error);
+        }
+    }
+
+    /**
+     * 按天统计指定房间集合的普通礼物、幸运礼物和游戏金币消费。
+     *
+     * <p>多个房间的数据合并统计；日期范围内没有流水的日期由ES日期直方图返回空桶，
+     * 所有消费值为0。</p>
+     *
+     * @param dto 房间集合及业务日期范围
+     * @return 按业务日期升序排列的每日金币消费统计
+     */
+    public List<RoomCoinDailyConsumeStatVO> roomDailyConsumeStat(RoomWalletAnalysisDTO dto) {
+        validateRoomDateRange(dto);
+        List<String> indices = getIndices(dto);
+        long searchStartedAt = System.currentTimeMillis();
+
+        BoolQuery.Builder boolBuilder = new BoolQuery.Builder();
+        boolBuilder.filter(EsSearchUtil.getTermsOr("room_id", dto.getRoomIds()));
+        EsSearchUtil.setDateEQ(boolBuilder, "dt", "yyyy-MM-dd", dto.getStartDate(), dto.getEndDate());
+        // 只保留三个金币消费业务类型，不额外使用status重复限定流水方向。
+        boolBuilder.filter(EsSearchUtil.getTermsOr("business_type", List.of(
+                EBusinessType.SEND_GIFT.getCode(),
+                EBusinessType.SEND_LUCKY_GIFT.getCode(),
+                EBusinessType.GAME_CONSUME.getCode()
+        )));
+
+        SearchRequest request = SearchRequest.of(search -> search
+                .index(indices)
+                .ignoreUnavailable(true)
+                .size(0)
+                .query(boolBuilder.build()._toQuery())
+                .aggregations("daily", daily -> daily
+                        .dateHistogram(histogram -> histogram
+                                .field("dt")
+                                .calendarInterval(CalendarInterval.Day)
+                                .format("yyyy-MM-dd")
+                                // 返回空日期桶，并使用接口日期范围补齐首尾没有消费的日期。
+                                .minDocCount(0)
+                                .extendedBounds(bounds -> bounds
+                                        .min(FieldDateMath.of(value -> value.expr(dto.getStartDate())))
+                                        .max(FieldDateMath.of(value -> value.expr(dto.getEndDate())))))
+                        .aggregations("normal_gift_consume", aggregation -> aggregation
+                                .filter(EsSearchUtil.getTerm(
+                                        "business_type", EBusinessType.SEND_GIFT.getCode()))
+                                .aggregations("tokens", tokens -> tokens.sum(sum -> sum.field("tokens"))))
+                        .aggregations("lucky_gift_consume", aggregation -> aggregation
+                                .filter(EsSearchUtil.getTerm(
+                                        "business_type", EBusinessType.SEND_LUCKY_GIFT.getCode()))
+                                .aggregations("tokens", tokens -> tokens.sum(sum -> sum.field("tokens"))))
+                        .aggregations("game_consume", aggregation -> aggregation
+                                .filter(EsSearchUtil.getTerm(
+                                        "business_type", EBusinessType.GAME_CONSUME.getCode()))
+                                .aggregations("tokens", tokens -> tokens.sum(sum -> sum.field("tokens"))))));
+
+        try {
+            log.debug("===> ES-Search room coin daily consume DSL. request={}", request);
+            SearchResponse<Void> response = client.search(request, Void.class);
+            if (response.timedOut()) {
+                throw new ServiceException("房间金币每日消费统计查询超时，未返回完整结果");
+            }
+
+            List<DateHistogramBucket> buckets = response.aggregations()
+                    .get("daily").dateHistogram().buckets().array();
+            List<RoomCoinDailyConsumeStatVO> result = new ArrayList<>(buckets.size());
+            for (DateHistogramBucket bucket : buckets) {
+                RoomCoinDailyConsumeStatVO stat = new RoomCoinDailyConsumeStatVO();
+                stat.setDt(bucket.keyAsString());
+                Map<String, Aggregate> aggregations = bucket.aggregations();
+                stat.setNormalGiftConsumeTokens(filteredTokens(aggregations, "normal_gift_consume"));
+                stat.setLuckyGiftConsumeTokens(filteredTokens(aggregations, "lucky_gift_consume"));
+                stat.setGameConsumeTokens(filteredTokens(aggregations, "game_consume"));
+                result.add(stat);
+            }
+
+            log.info("===> ES-Search room coin daily consume. indices={}, roomIds={}, startDate={}, endDate={}, "
+                            + "dayCount={}, esTookMs={}, searchCostMs={}",
+                    indices, dto.getRoomIds(), dto.getStartDate(), dto.getEndDate(), result.size(),
+                    response.took(), System.currentTimeMillis() - searchStartedAt);
+            return result;
+        } catch (IOException | ElasticsearchException error) {
+            log.error("ES room coin daily consume failed, indices={}, roomIds={}, startDate={}, endDate={}, "
+                            + "searchCostMs={}, error={}",
+                    indices, dto.getRoomIds(), dto.getStartDate(), dto.getEndDate(),
+                    System.currentTimeMillis() - searchStartedAt, error.getMessage(), error);
+            throw new ServiceException("查询房间金币每日消费统计失败，error=" + error.getMessage(), error);
         }
     }
 
@@ -362,9 +450,49 @@ public class WalletCoinAnalysisSearch {
     }
 
     /**
+     * 校验房间集合及业务日期范围。
+     *
+     * @param dto 查询参数
+     */
+    private static void validateRoomDateRange(RoomWalletAnalysisDTO dto) {
+        if (dto == null || dto.getRoomIds() == null || dto.getRoomIds().isEmpty()) {
+            throw new ServiceException("房间ID集合不能为空");
+        }
+        if (dto.getRoomIds().stream().anyMatch(roomId -> roomId == null)) {
+            throw new ServiceException("房间ID集合不能包含空值");
+        }
+        if (StringUtils.isBlank(dto.getStartDate()) || StringUtils.isBlank(dto.getEndDate())) {
+            throw new ServiceException("统计开始日期和结束日期不能为空");
+        }
+
+        LocalDate startDate;
+        LocalDate endDate;
+        try {
+            startDate = LocalDate.parse(dto.getStartDate(), DATE_FORMATTER);
+            endDate = LocalDate.parse(dto.getEndDate(), DATE_FORMATTER);
+        } catch (DateTimeParseException error) {
+            throw new ServiceException("统计日期格式错误，请使用yyyy-MM-dd，例如：2026-08-23", error);
+        }
+        if (endDate.isBefore(startDate)) {
+            throw new ServiceException("统计结束日期不能早于开始日期");
+        }
+    }
+
+    /**
      * 根据业务日期生成需要查询的按天物理索引。
      */
     private static List<String> getIndices(UserCoinAnalysisDTO dto) {
+        return EsSearchUtil.getIndices(
+                EsIndexAlias.SANO_WALLET_COIN_RECORD,
+                dto.getStartDate() + " 00:00:00",
+                dto.getEndDate() + " 23:59:59"
+        );
+    }
+
+    /**
+     * 根据业务日期生成需要查询的金币按天物理索引。
+     */
+    private static List<String> getIndices(RoomWalletAnalysisDTO dto) {
         return EsSearchUtil.getIndices(
                 EsIndexAlias.SANO_WALLET_COIN_RECORD,
                 dto.getStartDate() + " 00:00:00",

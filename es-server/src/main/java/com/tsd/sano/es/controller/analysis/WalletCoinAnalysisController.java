@@ -1,8 +1,10 @@
 package com.tsd.sano.es.controller.analysis;
 
+import com.tsd.sano.es.controller.analysis.dto.RoomWalletAnalysisDTO;
 import com.tsd.sano.es.controller.analysis.dto.UserCoinAnalysisDTO;
 import com.tsd.sano.es.controller.analysis.vo.CoinConsumePropTopVO;
 import com.tsd.sano.es.controller.analysis.vo.CoinConsumeTargetTopVO;
+import com.tsd.sano.es.controller.analysis.vo.RoomCoinDailyConsumeStatVO;
 import com.tsd.sano.es.controller.analysis.vo.UserCoinDailyStatVO;
 import com.tsd.sano.es.core.result.ResultVO;
 import com.tsd.sano.es.modules.search.service.WalletCoinAnalysisSearch;
@@ -39,6 +41,17 @@ public class WalletCoinAnalysisController {
     @PostMapping("/dailyStat")
     public ResultVO<List<UserCoinDailyStatVO>> dailyStat(@RequestBody UserCoinAnalysisDTO dto) {
         return ResultVO.success(walletCoinAnalysisSearch.dailyStat(dto));
+    }
+
+    /**
+     * 按天统计指定房间集合的普通礼物、幸运礼物和游戏金币消费。
+     *
+     * @param dto 房间集合及业务日期范围
+     * @return 合并所有指定房间后的连续每日消费统计
+     */
+    @PostMapping("/roomDailyConsumeStat")
+    public ResultVO<List<RoomCoinDailyConsumeStatVO>> roomDailyConsumeStat(@RequestBody RoomWalletAnalysisDTO dto) {
+        return ResultVO.success(walletCoinAnalysisSearch.roomDailyConsumeStat(dto));
     }
 
     /**

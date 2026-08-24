@@ -1,19 +1,21 @@
-package com.tsd.sano.es.controller.coin.dto;
+package com.tsd.sano.es.controller.analysis.dto;
 
 import lombok.Data;
 
+import java.util.List;
+
 /**
- * 用户金币消费分析查询参数。
+ * 房间集合金币、钻石分析查询参数。
  *
  * @author lxw
  */
 @Data
-public class UserCoinAnalysisDTO {
+public class RoomWalletAnalysisDTO {
 
     /**
-     * 需要统计的用户ID。
+     * 需要合并统计的房间ID集合。
      */
-    private Long userId;
+    private List<Integer> roomIds;
 
     /**
      * 统计开始业务日期，格式yyyy-MM-dd，包含当天。

@@ -12,11 +12,13 @@ import co.elastic.clients.elasticsearch._types.query_dsl.BoolQuery;
 import co.elastic.clients.elasticsearch.core.SearchRequest;
 import co.elastic.clients.elasticsearch.core.SearchResponse;
 import co.elastic.clients.util.NamedValue;
+import com.tsd.sano.es.controller.analysis.dto.RoomWalletAnalysisDTO;
 import com.tsd.sano.es.controller.analysis.dto.UserDiamondAnalysisDTO;
 import com.tsd.sano.es.controller.analysis.vo.DiamondIncomePropTopVO;
 import com.tsd.sano.es.controller.analysis.vo.DiamondIncomePropVO;
 import com.tsd.sano.es.controller.analysis.vo.DiamondIncomeSourceTopVO;
 import com.tsd.sano.es.controller.analysis.vo.DiamondIncomeSourceVO;
+import com.tsd.sano.es.controller.analysis.vo.RoomDiamondDailyIncomeStatVO;
 import com.tsd.sano.es.controller.analysis.vo.UserDiamondDailyStatVO;
 import com.tsd.sano.es.core.exception.ServiceException;
 import com.tsd.sano.es.modules.search.EBusinessType;
@@ -153,6 +155,92 @@ public class WalletDiamondAnalysisSearch {
                     indices, dto.getUserId(), dto.getStartDate(), dto.getEndDate(),
                     System.currentTimeMillis() - searchStartedAt, error.getMessage(), error);
             throw new ServiceException("查询用户钻石每日收入统计失败，error=" + error.getMessage(), error);
+        }
+    }
+
+    /**
+     * 按天统计指定房间集合的普通礼物、幸运礼物和游戏钻石收入。
+     *
+     * <p>多个房间的数据合并统计；日期范围内没有流水的日期由ES日期直方图返回空桶，
+     * 所有收入值为0。</p>
+     *
+     * @param dto 房间集合及业务日期范围
+     * @return 按业务日期升序排列的每日钻石收入统计
+     */
+    public List<RoomDiamondDailyIncomeStatVO> roomDailyIncomeStat(RoomWalletAnalysisDTO dto) {
+        validateRoomDateRange(dto);
+        List<String> indices = getIndices(dto);
+        long searchStartedAt = System.currentTimeMillis();
+
+        BoolQuery.Builder boolBuilder = new BoolQuery.Builder();
+        boolBuilder.filter(EsSearchUtil.getTermsOr("room_id", dto.getRoomIds()));
+        EsSearchUtil.setDateEQ(boolBuilder, "dt", "yyyy-MM-dd", dto.getStartDate(), dto.getEndDate());
+        // 只保留三个钻石收入业务类型，不额外使用status重复限定流水方向。
+        boolBuilder.filter(EsSearchUtil.getTermsOr("business_type", List.of(
+                EBusinessType.RECEIVE_GIFT.getCode(),
+                EBusinessType.RECEIVE_LUCKY_GIFT.getCode(),
+                EBusinessType.ANCHOR_GAME_INCOME.getCode()
+        )));
+
+        SearchRequest request = SearchRequest.of(search -> search
+                .index(indices)
+                .ignoreUnavailable(true)
+                .size(0)
+                .query(boolBuilder.build()._toQuery())
+                .aggregations("daily", daily -> daily
+                        .dateHistogram(histogram -> histogram
+                                .field("dt")
+                                .calendarInterval(CalendarInterval.Day)
+                                .format("yyyy-MM-dd")
+                                // 返回空日期桶，并使用接口日期范围补齐首尾没有收入的日期。
+                                .minDocCount(0)
+                                .extendedBounds(bounds -> bounds
+                                        .min(FieldDateMath.of(value -> value.expr(dto.getStartDate())))
+                                        .max(FieldDateMath.of(value -> value.expr(dto.getEndDate())))))
+                        .aggregations("normal_gift_income", aggregation -> aggregation
+                                .filter(EsSearchUtil.getTerm(
+                                        "business_type", EBusinessType.RECEIVE_GIFT.getCode()))
+                                .aggregations("tokens", tokens -> tokens.sum(sum -> sum.field("tokens"))))
+                        .aggregations("lucky_gift_income", aggregation -> aggregation
+                                .filter(EsSearchUtil.getTerm(
+                                        "business_type", EBusinessType.RECEIVE_LUCKY_GIFT.getCode()))
+                                .aggregations("tokens", tokens -> tokens.sum(sum -> sum.field("tokens"))))
+                        .aggregations("game_income", aggregation -> aggregation
+                                .filter(EsSearchUtil.getTerm(
+                                        "business_type", EBusinessType.ANCHOR_GAME_INCOME.getCode()))
+                                .aggregations("tokens", tokens -> tokens.sum(sum -> sum.field("tokens"))))));
+
+        try {
+            log.debug("===> ES-Search room diamond daily income DSL. request={}", request);
+            SearchResponse<Void> response = client.search(request, Void.class);
+            if (response.timedOut()) {
+                throw new ServiceException("房间钻石每日收入统计查询超时，未返回完整结果");
+            }
+
+            List<DateHistogramBucket> buckets = response.aggregations()
+                    .get("daily").dateHistogram().buckets().array();
+            List<RoomDiamondDailyIncomeStatVO> result = new ArrayList<>(buckets.size());
+            for (DateHistogramBucket bucket : buckets) {
+                RoomDiamondDailyIncomeStatVO stat = new RoomDiamondDailyIncomeStatVO();
+                stat.setDt(bucket.keyAsString());
+                Map<String, Aggregate> aggregations = bucket.aggregations();
+                stat.setNormalGiftIncomeTokens(filteredTokens(aggregations, "normal_gift_income"));
+                stat.setLuckyGiftIncomeTokens(filteredTokens(aggregations, "lucky_gift_income"));
+                stat.setGameIncomeTokens(filteredTokens(aggregations, "game_income"));
+                result.add(stat);
+            }
+
+            log.info("===> ES-Search room diamond daily income. indices={}, roomIds={}, startDate={}, endDate={}, "
+                            + "dayCount={}, esTookMs={}, searchCostMs={}",
+                    indices, dto.getRoomIds(), dto.getStartDate(), dto.getEndDate(), result.size(),
+                    response.took(), System.currentTimeMillis() - searchStartedAt);
+            return result;
+        } catch (IOException | ElasticsearchException error) {
+            log.error("ES room diamond daily income failed, indices={}, roomIds={}, startDate={}, endDate={}, "
+                            + "searchCostMs={}, error={}",
+                    indices, dto.getRoomIds(), dto.getStartDate(), dto.getEndDate(),
+                    System.currentTimeMillis() - searchStartedAt, error.getMessage(), error);
+            throw new ServiceException("查询房间钻石每日收入统计失败，error=" + error.getMessage(), error);
         }
     }
 
@@ -341,9 +429,49 @@ public class WalletDiamondAnalysisSearch {
     }
 
     /**
+     * 校验房间集合及业务日期范围。
+     *
+     * @param dto 查询参数
+     */
+    private static void validateRoomDateRange(RoomWalletAnalysisDTO dto) {
+        if (dto == null || dto.getRoomIds() == null || dto.getRoomIds().isEmpty()) {
+            throw new ServiceException("房间ID集合不能为空");
+        }
+        if (dto.getRoomIds().stream().anyMatch(roomId -> roomId == null)) {
+            throw new ServiceException("房间ID集合不能包含空值");
+        }
+        if (StringUtils.isBlank(dto.getStartDate()) || StringUtils.isBlank(dto.getEndDate())) {
+            throw new ServiceException("统计开始日期和结束日期不能为空");
+        }
+
+        LocalDate startDate;
+        LocalDate endDate;
+        try {
+            startDate = LocalDate.parse(dto.getStartDate(), DATE_FORMATTER);
+            endDate = LocalDate.parse(dto.getEndDate(), DATE_FORMATTER);
+        } catch (DateTimeParseException error) {
+            throw new ServiceException("统计日期格式错误，请使用yyyy-MM-dd，例如：2026-08-23", error);
+        }
+        if (endDate.isBefore(startDate)) {
+            throw new ServiceException("统计结束日期不能早于开始日期");
+        }
+    }
+
+    /**
      * 根据业务日期生成需要查询的钻石按天物理索引。
      */
     private static List<String> getIndices(UserDiamondAnalysisDTO dto) {
+        return EsSearchUtil.getIndices(
+                EsIndexAlias.SANO_WALLET_DIAMOND_RECORD,
+                dto.getStartDate() + " 00:00:00",
+                dto.getEndDate() + " 23:59:59"
+        );
+    }
+
+    /**
+     * 根据业务日期生成需要查询的钻石按天物理索引。
+     */
+    private static List<String> getIndices(RoomWalletAnalysisDTO dto) {
         return EsSearchUtil.getIndices(
                 EsIndexAlias.SANO_WALLET_DIAMOND_RECORD,
                 dto.getStartDate() + " 00:00:00",

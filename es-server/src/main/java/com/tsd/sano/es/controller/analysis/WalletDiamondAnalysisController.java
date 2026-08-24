@@ -1,8 +1,10 @@
 package com.tsd.sano.es.controller.analysis;
 
+import com.tsd.sano.es.controller.analysis.dto.RoomWalletAnalysisDTO;
 import com.tsd.sano.es.controller.analysis.dto.UserDiamondAnalysisDTO;
 import com.tsd.sano.es.controller.analysis.vo.DiamondIncomePropTopVO;
 import com.tsd.sano.es.controller.analysis.vo.DiamondIncomeSourceTopVO;
+import com.tsd.sano.es.controller.analysis.vo.RoomDiamondDailyIncomeStatVO;
 import com.tsd.sano.es.controller.analysis.vo.UserDiamondDailyStatVO;
 import com.tsd.sano.es.core.result.ResultVO;
 import com.tsd.sano.es.modules.search.service.WalletDiamondAnalysisSearch;
@@ -38,6 +40,17 @@ public class WalletDiamondAnalysisController {
     @PostMapping("/dailyStat")
     public ResultVO<List<UserDiamondDailyStatVO>> dailyStat(@RequestBody UserDiamondAnalysisDTO dto) {
         return ResultVO.success(walletDiamondAnalysisSearch.dailyStat(dto));
+    }
+
+    /**
+     * 按天统计指定房间集合的普通礼物、幸运礼物和游戏钻石收入。
+     *
+     * @param dto 房间集合及业务日期范围
+     * @return 合并所有指定房间后的连续每日收入统计
+     */
+    @PostMapping("/roomDailyIncomeStat")
+    public ResultVO<List<RoomDiamondDailyIncomeStatVO>> roomDailyIncomeStat(@RequestBody RoomWalletAnalysisDTO dto) {
+        return ResultVO.success(walletDiamondAnalysisSearch.roomDailyIncomeStat(dto));
     }
 
     /**
