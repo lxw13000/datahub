@@ -47,3 +47,5 @@ uploads/
 # 提现用户钻石分析工具的本地输入与输出
 /tools/withdraw-diamond-analysis/*.json
 /tools/withdraw-diamond-analysis/*.xlsx
+/tools/platform-subsidy-analysis/*.json
+/tools/platform-subsidy-analysis/*.xlsx
