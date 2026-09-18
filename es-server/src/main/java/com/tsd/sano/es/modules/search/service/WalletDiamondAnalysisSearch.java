@@ -12,12 +12,15 @@ import co.elastic.clients.elasticsearch._types.query_dsl.BoolQuery;
 import co.elastic.clients.elasticsearch.core.SearchRequest;
 import co.elastic.clients.elasticsearch.core.SearchResponse;
 import co.elastic.clients.util.NamedValue;
+import com.tsd.sano.es.controller.analysis.dto.PlatformSubsidyAnalysisDTO;
 import com.tsd.sano.es.controller.analysis.dto.RoomWalletAnalysisDTO;
 import com.tsd.sano.es.controller.analysis.dto.UserDiamondAnalysisDTO;
 import com.tsd.sano.es.controller.analysis.vo.DiamondIncomePropTopVO;
 import com.tsd.sano.es.controller.analysis.vo.DiamondIncomePropVO;
 import com.tsd.sano.es.controller.analysis.vo.DiamondIncomeSourceTopVO;
 import com.tsd.sano.es.controller.analysis.vo.DiamondIncomeSourceVO;
+import com.tsd.sano.es.controller.analysis.vo.PlatformSubsidyDailyStatVO;
+import com.tsd.sano.es.controller.analysis.vo.PlatformSubsidyStatVO;
 import com.tsd.sano.es.controller.analysis.vo.RoomDiamondDailyIncomeStatVO;
 import com.tsd.sano.es.controller.analysis.vo.UserDiamondDailyStatVO;
 import com.tsd.sano.es.core.exception.ServiceException;
@@ -34,6 +37,7 @@ import java.time.LocalDate;
 import java.time.format.DateTimeFormatter;
 import java.time.format.DateTimeParseException;
 import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 
@@ -63,6 +67,23 @@ public class WalletDiamondAnalysisSearch {
      * 增大各分片候选桶数量，降低跨多个按天索引统计Top10时遗漏全局候选项的概率。
      */
     private static final int TOP_SHARD_SIZE = 200;
+
+    /**
+     * 计入钻石平台补贴统计的业务类型。
+     */
+    private static final List<Integer> PLATFORM_SUBSIDY_BUSINESS_TYPES = List.of(
+            EBusinessType.LIVE_HOUR_REWARD.getCode(),
+            EBusinessType.ANCHOR_QUALITY_REWARD.getCode(),
+            EBusinessType.SUPPER_HOST_PROXY_INCOME.getCode(),
+            EBusinessType.SUPPER_HOST_PROXY_INCOME_LUCKY.getCode(),
+            EBusinessType.SUPPER_HOST_INCOME.getCode(),
+            EBusinessType.SUPPER_HOST_INCOME_LUCKY.getCode(),
+            EBusinessType.ACT_RANK_LUCKY_INCOME.getCode(),
+            EBusinessType.ACT_RANK_GAME_INCOME.getCode(),
+            EBusinessType.ACT_RANK_PROXY_INCOME.getCode(),
+            EBusinessType.HIGH_USER_REWARD.getCode(),
+            EBusinessType.PK_RANK_TOP_REWARD.getCode()
+    );
 
     /**
      * Elasticsearch Java客户端。
@@ -241,6 +262,94 @@ public class WalletDiamondAnalysisSearch {
                     indices, dto.getRoomIds(), dto.getStartDate(), dto.getEndDate(),
                     System.currentTimeMillis() - searchStartedAt, error.getMessage(), error);
             throw new ServiceException("查询房间钻石每日收入统计失败，error=" + error.getMessage(), error);
+        }
+    }
+
+    /**
+     * 按天、按业务类型汇总指定日期范围内发放的钻石平台补贴。
+     *
+     * <p>返回连续的业务日期和固定的平台补贴业务类型；日期或类型没有对应流水时tokens返回0。</p>
+     *
+     * @param dto 业务日期范围
+     * @return 按日期和business_type升序排列的钻石平台补贴汇总
+     */
+    public List<PlatformSubsidyDailyStatVO> platformSubsidyByType(PlatformSubsidyAnalysisDTO dto) {
+        validateSubsidyDateRange(dto);
+        List<String> indices = getIndices(dto);
+        long searchStartedAt = System.currentTimeMillis();
+
+        BoolQuery.Builder boolBuilder = new BoolQuery.Builder();
+        EsSearchUtil.setDateEQ(boolBuilder, "dt", "yyyy-MM-dd", dto.getStartDate(), dto.getEndDate());
+        boolBuilder.filter(EsSearchUtil.getTermsOr("business_type", PLATFORM_SUBSIDY_BUSINESS_TYPES));
+
+        SearchRequest request = SearchRequest.of(search -> search
+                .index(indices)
+                .ignoreUnavailable(true)
+                .size(0)
+                .query(boolBuilder.build()._toQuery())
+                .aggregations("daily", daily -> daily
+                        .dateHistogram(histogram -> histogram
+                                .field("dt")
+                                .calendarInterval(CalendarInterval.Day)
+                                .format("yyyy-MM-dd")
+                                // 补齐查询范围内没有平台补贴流水的日期。
+                                .minDocCount(0)
+                                .extendedBounds(bounds -> bounds
+                                        .min(FieldDateMath.of(value -> value.expr(dto.getStartDate())))
+                                        .max(FieldDateMath.of(value -> value.expr(dto.getEndDate())))))
+                        .aggregations("business_types", aggregation -> aggregation
+                                .terms(terms -> terms
+                                        .field("business_type")
+                                        .size(PLATFORM_SUBSIDY_BUSINESS_TYPES.size()))
+                                .aggregations("tokens", tokens -> tokens.sum(sum -> sum.field("tokens"))))));
+
+        try {
+            log.debug("===> ES-Search diamond platform subsidy by type DSL. request={}", request);
+            SearchResponse<Void> response = client.search(request, Void.class);
+            if (response.timedOut()) {
+                throw new ServiceException("钻石平台补贴汇总查询超时，未返回完整结果");
+            }
+
+            List<DateHistogramBucket> dailyBuckets = response.aggregations()
+                    .get("daily").dateHistogram().buckets().array();
+            List<PlatformSubsidyDailyStatVO> result = new ArrayList<>(dailyBuckets.size());
+            for (DateHistogramBucket dailyBucket : dailyBuckets) {
+                Map<Integer, Long> tokensByBusinessType = new HashMap<>();
+                List<LongTermsBucket> businessTypeBuckets = dailyBucket.aggregations()
+                        .get("business_types").lterms().buckets().array();
+                for (LongTermsBucket businessTypeBucket : businessTypeBuckets) {
+                    tokensByBusinessType.put(
+                            Math.toIntExact(businessTypeBucket.key()),
+                            Math.round(businessTypeBucket.aggregations().get("tokens").sum().value())
+                    );
+                }
+
+                // terms聚合不会返回无数据的业务类型，这里按固定类型表补齐0值。
+                List<PlatformSubsidyStatVO> stats = new ArrayList<>(PLATFORM_SUBSIDY_BUSINESS_TYPES.size());
+                for (Integer businessType : PLATFORM_SUBSIDY_BUSINESS_TYPES) {
+                    PlatformSubsidyStatVO stat = new PlatformSubsidyStatVO();
+                    stat.setBusinessType(businessType);
+                    stat.setTokens(tokensByBusinessType.getOrDefault(businessType, 0L));
+                    stats.add(stat);
+                }
+
+                PlatformSubsidyDailyStatVO dailyStat = new PlatformSubsidyDailyStatVO();
+                dailyStat.setDt(dailyBucket.keyAsString());
+                dailyStat.setStats(stats);
+                result.add(dailyStat);
+            }
+
+            log.info("===> ES-Search diamond platform subsidy by type. indices={}, startDate={}, endDate={}, "
+                            + "dayCount={}, esTookMs={}, searchCostMs={}",
+                    indices, dto.getStartDate(), dto.getEndDate(), result.size(), response.took(),
+                    System.currentTimeMillis() - searchStartedAt);
+            return result;
+        } catch (IOException | ElasticsearchException error) {
+            log.error("ES diamond platform subsidy by type failed, indices={}, startDate={}, endDate={}, "
+                            + "searchCostMs={}, error={}",
+                    indices, dto.getStartDate(), dto.getEndDate(),
+                    System.currentTimeMillis() - searchStartedAt, error.getMessage(), error);
+            throw new ServiceException("查询钻石平台补贴汇总失败，error=" + error.getMessage(), error);
         }
     }
 
@@ -458,6 +567,29 @@ public class WalletDiamondAnalysisSearch {
     }
 
     /**
+     * 校验平台补贴统计的业务日期范围。
+     *
+     * @param dto 查询参数
+     */
+    private static void validateSubsidyDateRange(PlatformSubsidyAnalysisDTO dto) {
+        if (dto == null || StringUtils.isBlank(dto.getStartDate()) || StringUtils.isBlank(dto.getEndDate())) {
+            throw new ServiceException("统计开始日期和结束日期不能为空");
+        }
+
+        LocalDate startDate;
+        LocalDate endDate;
+        try {
+            startDate = LocalDate.parse(dto.getStartDate(), DATE_FORMATTER);
+            endDate = LocalDate.parse(dto.getEndDate(), DATE_FORMATTER);
+        } catch (DateTimeParseException error) {
+            throw new ServiceException("统计日期格式错误，请使用yyyy-MM-dd，例如：2026-08-23", error);
+        }
+        if (endDate.isBefore(startDate)) {
+            throw new ServiceException("统计结束日期不能早于开始日期");
+        }
+    }
+
+    /**
      * 根据业务日期生成需要查询的钻石按天物理索引。
      */
     private static List<String> getIndices(UserDiamondAnalysisDTO dto) {
@@ -472,6 +604,17 @@ public class WalletDiamondAnalysisSearch {
      * 根据业务日期生成需要查询的钻石按天物理索引。
      */
     private static List<String> getIndices(RoomWalletAnalysisDTO dto) {
+        return EsSearchUtil.getIndices(
+                EsIndexAlias.SANO_WALLET_DIAMOND_RECORD,
+                dto.getStartDate() + " 00:00:00",
+                dto.getEndDate() + " 23:59:59"
+        );
+    }
+
+    /**
+     * 根据业务日期生成需要查询的钻石平台补贴按天物理索引。
+     */
+    private static List<String> getIndices(PlatformSubsidyAnalysisDTO dto) {
         return EsSearchUtil.getIndices(
                 EsIndexAlias.SANO_WALLET_DIAMOND_RECORD,
                 dto.getStartDate() + " 00:00:00",

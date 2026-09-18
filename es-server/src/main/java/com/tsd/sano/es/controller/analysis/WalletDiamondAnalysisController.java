@@ -1,9 +1,11 @@
 package com.tsd.sano.es.controller.analysis;
 
+import com.tsd.sano.es.controller.analysis.dto.PlatformSubsidyAnalysisDTO;
 import com.tsd.sano.es.controller.analysis.dto.RoomWalletAnalysisDTO;
 import com.tsd.sano.es.controller.analysis.dto.UserDiamondAnalysisDTO;
 import com.tsd.sano.es.controller.analysis.vo.DiamondIncomePropTopVO;
 import com.tsd.sano.es.controller.analysis.vo.DiamondIncomeSourceTopVO;
+import com.tsd.sano.es.controller.analysis.vo.PlatformSubsidyDailyStatVO;
 import com.tsd.sano.es.controller.analysis.vo.RoomDiamondDailyIncomeStatVO;
 import com.tsd.sano.es.controller.analysis.vo.UserDiamondDailyStatVO;
 import com.tsd.sano.es.core.result.ResultVO;
@@ -51,6 +53,18 @@ public class WalletDiamondAnalysisController {
     @PostMapping("/roomDailyIncomeStat")
     public ResultVO<List<RoomDiamondDailyIncomeStatVO>> roomDailyIncomeStat(@RequestBody RoomWalletAnalysisDTO dto) {
         return ResultVO.success(walletDiamondAnalysisSearch.roomDailyIncomeStat(dto));
+    }
+
+    /**
+     * 按天、按业务类型汇总指定日期范围内发放的钻石平台补贴。
+     *
+     * @param dto 业务日期范围
+     * @return 每日各钻石平台补贴业务类型的tokens累计值
+     */
+    @PostMapping("/platformSubsidyByType")
+    public ResultVO<List<PlatformSubsidyDailyStatVO>> platformSubsidyByType(
+            @RequestBody PlatformSubsidyAnalysisDTO dto) {
+        return ResultVO.success(walletDiamondAnalysisSearch.platformSubsidyByType(dto));
     }
 
     /**

@@ -1,9 +1,11 @@
 package com.tsd.sano.es.controller.analysis;
 
+import com.tsd.sano.es.controller.analysis.dto.PlatformSubsidyAnalysisDTO;
 import com.tsd.sano.es.controller.analysis.dto.RoomWalletAnalysisDTO;
 import com.tsd.sano.es.controller.analysis.dto.UserCoinAnalysisDTO;
 import com.tsd.sano.es.controller.analysis.vo.CoinConsumePropTopVO;
 import com.tsd.sano.es.controller.analysis.vo.CoinConsumeTargetTopVO;
+import com.tsd.sano.es.controller.analysis.vo.PlatformSubsidyDailyStatVO;
 import com.tsd.sano.es.controller.analysis.vo.RoomCoinDailyConsumeStatVO;
 import com.tsd.sano.es.controller.analysis.vo.UserCoinDailyStatVO;
 import com.tsd.sano.es.core.result.ResultVO;
@@ -52,6 +54,18 @@ public class WalletCoinAnalysisController {
     @PostMapping("/roomDailyConsumeStat")
     public ResultVO<List<RoomCoinDailyConsumeStatVO>> roomDailyConsumeStat(@RequestBody RoomWalletAnalysisDTO dto) {
         return ResultVO.success(walletCoinAnalysisSearch.roomDailyConsumeStat(dto));
+    }
+
+    /**
+     * 按天、按业务类型汇总指定日期范围内发放的金币平台补贴。
+     *
+     * @param dto 业务日期范围
+     * @return 每日各金币平台补贴业务类型的tokens累计值
+     */
+    @PostMapping("/platformSubsidyByType")
+    public ResultVO<List<PlatformSubsidyDailyStatVO>> platformSubsidyByType(
+            @RequestBody PlatformSubsidyAnalysisDTO dto) {
+        return ResultVO.success(walletCoinAnalysisSearch.platformSubsidyByType(dto));
     }
 
     /**
