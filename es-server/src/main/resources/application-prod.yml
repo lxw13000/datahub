@@ -32,8 +32,6 @@ logging:
     root: INFO
     com.tsd.sano.es: INFO
     com.tsd.sano.es.modules.tplusone: INFO
-    # 正式环境输出Polling五分钟汇总和关键事件；逐批耗时保留为DEBUG供临时排查。
-    com.tsd.sano.es.modules.polling: INFO
     org.springframework: INFO
     org.springframework.jdbc.core: INFO
     co.elastic.clients: WARN
@@ -42,7 +40,7 @@ logging:
     com.zaxxer.hikari: INFO
 
 sano:
-  # all与query都开放查询；query只关闭T+1和未来polling同步能力。
+  # all与query都开放查询；query关闭T+1同步能力。
   server-mode: ${SANO_SERVER_MODE:all}
   log:
     # 生产环境保留周期较长，便于追踪历史同步问题。
@@ -73,15 +71,13 @@ sano:
       # 机器人签名密钥；未启用签名时留空。
       secret: ${LARK_WEBHOOK_SECRET:WJ83ViVAM6RbDUjuxhvtah}
   import:
-    # T+1、polling及未来MQ共用的写入资源和安全排空参数。
+    # T+1写入资源和安全排空参数。
     common:
       # 部署drain等待Reader、队列、Bulk和任务终态安全收敛的最长秒数。
       drain-timeout-seconds: ${SANO_ES_SYNC_DRAIN_TIMEOUT_SECONDS:600}
-      # 所有同步引擎合计允许的在途ES Bulk请求数。
+      # 当前实例允许的在途ES Bulk请求总数。
       global-bulk-concurrency: ${SANO_ES_SYNC_GLOBAL_BULK_CONCURRENCY:5}
-      # polling有等待请求时为其保留的Bulk并发数。
-      polling-reserved-concurrency: ${SANO_ES_SYNC_POLLING_RESERVED_CONCURRENCY:2}
-      # polling空闲时T+1最多可使用的Bulk并发数。
+      # T+1最多可使用的Bulk并发数。
       t-plus-one-max-concurrency: ${SANO_ES_SYNC_T_PLUS_ONE_MAX_CONCURRENCY:3}
 
     t-plus-one:
@@ -118,25 +114,8 @@ sano:
       # T+1批量写入期间是否临时将索引副本数调整为0。
       disable-replica: true
 
-    polling:
-      # 正式环境默认启用Polling；需要临时停用时可通过环境变量覆盖。
-      enabled: ${SANO_ES_POLLING_ENABLED:false}
-      # 当前实例允许同时持有并运行的Polling表数量。
-      max-active-tables: ${SANO_ES_POLLING_MAX_ACTIVE_TABLES:5}
-      # 当前日期查询为空后再次轮询MySQL的等待时间。
-      poll-interval: ${SANO_ES_POLLING_POLL_INTERVAL:5s}
-      # 次日零点后继续等待旧日期晚到数据的时间。
-      date-close-delay: ${SANO_ES_POLLING_DATE_CLOSE_DELAY:10m}
-      # 每次按日期和递增ID读取MySQL的最大记录数。
-      read-batch-size: ${SANO_ES_POLLING_READ_BATCH_SIZE:3000}
-      # ES整批Bulk失败后的重试次数，不包含首次请求。
-      bulk-retry-times: ${SANO_ES_POLLING_BULK_RETRY_TIMES:2}
-      # 每次整批Bulk重试前的固定等待时间。
-      bulk-retry-interval: ${SANO_ES_POLLING_BULK_RETRY_INTERVAL:1s}
-
-    # T+1与polling共用同一表目录；enabled=false时两种引擎都忽略该表。
+    # T+1表目录；enabled=false时不生成和执行该表任务。
     # table-name是同步表唯一标识；index-alias为空时默认等于table-name，仅作为业务查询Alias。
-    # sync-mode未配置时默认t-plus-one；polling首次启动还必须配置bootstrap-start-date。
     # reconcile未配置时默认true；同步流程统一异步调用，对账入口按单表配置决定是否实际执行。
     # id-column用于MySQL游标和ES文档ID；dt-column/dt-column-type/where-sql决定日期查询条件。
     # delete-history-index和reserve-days控制成功导入后的历史索引清理。
@@ -145,9 +124,6 @@ sano:
         index-alias: sano_wallet_coin_record
         table-name: sano_wallet_coin_record
         mapping-file: sano_wallet_coin_record.json
-        # 使用延迟轮询同步；首次没有checkpoint时从指定业务日期开始。
-        sync-mode: t_plus_one
-        bootstrap-start-date: 2026-07-29
         # 开启对账；对账入口按单表配置决定是否实际执行。
         reconcile: true
         # 导入完成是否删除该表历史索引
@@ -164,7 +140,6 @@ sano:
         index-alias: sano_wallet_diamond_record
         table-name: sano_wallet_diamond_record
         mapping-file: sano_wallet_diamond_record.json
-        sync-mode: t-plus-one
         reconcile: true
         # 导入完成是否删除该表历史索引
         delete-history-index: true
@@ -180,7 +155,6 @@ sano:
         index-alias: sano_wallet_lucky_diamond_record_10m
         table-name: sano_wallet_lucky_diamond_record_10m
         mapping-file: sano_wallet_lucky_diamond_record_10m.json
-        sync-mode: t-plus-one
         reconcile: true
         # 导入完成是否删除该表历史索引
         delete-history-index: true
@@ -196,7 +170,6 @@ sano:
         index-alias: sano_game_record
         table-name: sano_game_record
         mapping-file: sano_game_record.json
-        sync-mode: t-plus-one
         reconcile: true
         # 导入完成是否删除该表历史索引
         delete-history-index: true

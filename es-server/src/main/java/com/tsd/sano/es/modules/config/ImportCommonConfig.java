@@ -4,7 +4,7 @@ import lombok.Getter;
 import lombok.Setter;
 
 /**
- * T+1、Polling及未来同步引擎共用的资源协调参数。
+ * T+1同步使用的资源协调参数。
  */
 @Getter
 @Setter
@@ -16,17 +16,12 @@ public class ImportCommonConfig {
     private int drainTimeoutSeconds = 600;
 
     /**
-     * 所有同步引擎合计允许的在途ES Bulk请求数。
+     * 当前实例允许的在途ES Bulk请求总数。
      */
     private int globalBulkConcurrency = 3;
 
     /**
-     * Polling存在等待请求时为其保留的并发数。
-     */
-    private int pollingReservedConcurrency = 2;
-
-    /**
-     * Polling空闲时T+1最多可使用的并发数。
+     * T+1最多可使用的Bulk并发数。
      */
     private int tPlusOneMaxConcurrency = 3;
 }

@@ -35,8 +35,6 @@ INTERNAL_QUERY_BASE_URL="${INTERNAL_QUERY_BASE_URL:-http://127.0.0.1:9103}"
 if [ -z "${NGINX_SMOKE_COMMAND:-}" ]; then
   NGINX_SMOKE_COMMAND="curl -fsS --connect-timeout 5 --max-time 30 -H 'token: ${SYNC_API_TOKEN}' '${PUBLIC_QUERY_BASE_URL}/ready' >/dev/null && curl -fsS --connect-timeout 5 --max-time 30 -H 'token: ${SYNC_API_TOKEN}' '${INTERNAL_QUERY_BASE_URL}/ready' >/dev/null"
 fi
-# 版本B可配置检查命令验证表状态和checkpoint推进；版本A允许留空。
-POST_START_SYNC_CHECK_COMMAND="${POST_START_SYNC_CHECK_COMMAND:-}"
 
 # 测试资源名和端口固定，防止与同机正式环境交叉操作。
 SANO_SERVER_MODE="all"
@@ -495,10 +493,6 @@ verify_new_sync_runtime() {
     || fail "新版同步协调器未恢复：code=${code}, mode=${mode}, state=${state}。"
   log "新版同步协调器已恢复RUNNING。"
 
-  if [ -n "${POST_START_SYNC_CHECK_COMMAND}" ]; then
-    log "执行版本B同步表状态及checkpoint推进检查。"
-    bash -c "${POST_START_SYNC_CHECK_COMMAND}" || fail "新版同步恢复扩展检查失败。"
-  fi
 }
 
 stop_query_handoff() {

@@ -18,7 +18,7 @@ import java.io.InputStream;
  * Elasticsearch索引通用远程操作服务。
  *
  * <p>该服务只处理索引创建、存在性检查、Alias、Settings、Refresh和删除等原子操作，
- * 不感知T+1、Polling、业务日期和历史保留规则。具体同步模块负责组织调用时机和异常策略。</p>
+ * 不感知具体业务日期和历史保留规则，T+1模块负责组织调用时机和异常策略。</p>
  */
 @Service
 public class EsIndexManager {

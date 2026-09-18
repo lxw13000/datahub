@@ -7,7 +7,7 @@ import org.springframework.util.unit.DataSize;
 /**
  * T+1按日建索引导入参数。
  *
- * <p>Polling和未来同步引擎不得复用这些吞吐及失败策略。</p>
+ * <p>这些吞吐和失败策略仅适用于T+1任务。</p>
  */
 @Getter
 @Setter

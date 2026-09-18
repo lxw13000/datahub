@@ -31,7 +31,7 @@ import java.util.List;
  *
  * <p>通过独立Spring执行器异步读取MySQL和ES的总量、最小ID及最大ID并比较；
  * ES统计前主动刷新已关闭日期的物理索引，避免尚未刷新文档造成假差异。
- * 该服务不依赖Polling主循环或checkpoint，不维护任务状态，也不执行重试。</p>
+ * 该服务不维护导入任务状态，也不执行重试。</p>
  */
 @Service
 public class ReconcileStatisticsService {
@@ -149,7 +149,7 @@ public class ReconcileStatisticsService {
                 return;
             }
 
-            // Polling Bulk不主动刷新；对账前刷新D日索引，确保统计包含最后写入的批次。
+            // 对账前主动刷新日索引，确保统计包含任务结束前最后写入的批次。
             indexManager.refresh(indexName);
             long esStartedAt = System.currentTimeMillis();
             SearchRequest minimumRequest = new SearchRequest.Builder()

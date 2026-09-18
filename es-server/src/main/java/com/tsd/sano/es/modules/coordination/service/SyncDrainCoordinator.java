@@ -3,7 +3,6 @@ package com.tsd.sano.es.modules.coordination.service;
 import com.tsd.sano.es.core.exception.ServiceException;
 import com.tsd.sano.es.modules.config.EsImportProperties;
 import com.tsd.sano.es.modules.config.EsServiceModeManager;
-import com.tsd.sano.es.modules.polling.service.PollingCoordinator;
 import com.tsd.sano.es.modules.tplusone.model.*;
 import com.tsd.sano.es.modules.tplusone.pipeline.TPlusOneMemoryLimiter;
 import org.springframework.stereotype.Component;
@@ -15,7 +14,7 @@ import java.util.function.Supplier;
 /**
  * 当前同步实例的统一部署排空协调器
  *
- * <p>该类只保存当前JVM的协调器状态和drain结果，不覆盖T+1任务或Polling checkpoint中的持久业务状态。
+ * <p>该类只保存当前JVM的协调器状态和drain结果，不覆盖T+1任务的持久业务状态。
  * 任务启动、drain切换和cancel恢复都在同一监视器下线性化，避免已经报告DRAINED后又启动新任务</p>
  */
 @Component
@@ -25,7 +24,6 @@ public class SyncDrainCoordinator {
     private final TPlusOneMemoryLimiter memoryLimiter;
     private final EsImportProperties importProperties;
     private final EsServiceModeManager serviceModeManager;
-    private final PollingCoordinator pollingCoordinator;
     private final long drainTimeoutMillis;
 
     /**
@@ -64,13 +62,11 @@ public class SyncDrainCoordinator {
     public SyncDrainCoordinator(GlobalEsWritePermitManager permitManager,
                                 TPlusOneMemoryLimiter memoryLimiter,
                                 EsImportProperties importProperties,
-                                EsServiceModeManager serviceModeManager,
-                                PollingCoordinator pollingCoordinator) {
+                                EsServiceModeManager serviceModeManager) {
         this.permitManager = permitManager;
         this.memoryLimiter = memoryLimiter;
         this.importProperties = importProperties;
         this.serviceModeManager = serviceModeManager;
-        this.pollingCoordinator = pollingCoordinator;
         this.drainTimeoutMillis = Math.max(1,
                 importProperties.getCommon().getDrainTimeoutSeconds()) * 1000L;
     }
@@ -92,7 +88,6 @@ public class SyncDrainCoordinator {
 
         coordinatorState = CoordinatorState.DRAINING;
         operation = new DrainOperation(UUID.randomUUID().toString(), System.currentTimeMillis());
-        pollingCoordinator.requestDrain();
         if (activeTPlusOneTask != null && activeTPlusOneTask.context != null) {
             activeTPlusOneTask.context.requestDrainStop(operation.operationId);
         }
@@ -120,7 +115,6 @@ public class SyncDrainCoordinator {
         operation.cancelRequested = true;
         operation.completedAtMillis = System.currentTimeMillis();
         pendingResumeTaskIds.addAll(operation.interruptedTaskIds);
-        pollingCoordinator.resumeAfterDrainCancel();
         return snapshotLocked();
     }
 
@@ -287,8 +281,7 @@ public class SyncDrainCoordinator {
     }
 
     /**
-     * 完成判据同时检查T+1调度器、活动任务和内存预留，Polling Worker及checkpoint，
-     * 以及两种同步模式共用的Bulk许可。
+     * 完成判据同时检查T+1调度器、活动任务、Bulk许可和内存预留。
      */
     private void evaluateDrainLocked() {
         if (coordinatorState != CoordinatorState.DRAINING
@@ -299,20 +292,10 @@ public class SyncDrainCoordinator {
 
         GlobalEsWritePermitManager.Snapshot permits = permitManager.snapshot();
         TPlusOneMemoryLimiter.Snapshot memory = memoryLimiter.snapshot();
-        PollingCoordinator.DrainStatus polling = pollingCoordinator.drainStatus();
-        if (polling.stopped() && !polling.safe()) {
-            operation.result = DrainResult.FAILED;
-            operation.error = "Polling final checkpoint was not saved for tables: "
-                    + polling.failedTables();
-            operation.completedAtMillis = System.currentTimeMillis();
-            return;
-        }
 
         boolean pipelineStopped = !tPlusOneDispatcherActive
-                && activeTPlusOneTask == null
-                && polling.stopped();
+                && activeTPlusOneTask == null;
         boolean resourcesReturned = permits.activeTotal() == 0
-                && permits.waitingPolling() == 0
                 && permits.waitingTPlusOne() == 0
                 && memory.reservationCount() == 0;
         if (pipelineStopped && resourcesReturned) {
@@ -337,7 +320,6 @@ public class SyncDrainCoordinator {
         GlobalEsWritePermitManager.Snapshot permits = permitManager.snapshot();
         TPlusOneMemoryLimiter.Snapshot memory = memoryLimiter.snapshot();
         TPlusOneRuntimeSnapshot runtime = buildTPlusOneSnapshot(permits);
-        PollingCoordinator.DrainStatus polling = pollingCoordinator.drainStatus();
         String serviceMode = serviceModeManager.currentMode().name();
         return new DrainStatusSnapshot(
                 serviceMode,
@@ -349,7 +331,6 @@ public class SyncDrainCoordinator {
                         ? null : Instant.ofEpochMilli(operation.completedAtMillis),
                 operation == null ? null : operation.error,
                 runtime,
-                polling,
                 new ResourceSnapshot(permits, memory)
         );
     }
@@ -444,7 +425,6 @@ public class SyncDrainCoordinator {
                                       Instant completedAt,
                                       String error,
                                       TPlusOneRuntimeSnapshot tPlusOne,
-                                      PollingCoordinator.DrainStatus polling,
                                       ResourceSnapshot resources) {
     }
 

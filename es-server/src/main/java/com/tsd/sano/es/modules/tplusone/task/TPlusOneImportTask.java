@@ -5,9 +5,6 @@ import com.tsd.sano.es.modules.config.EsImportProperties;
 import com.tsd.sano.es.modules.config.EsServiceModeManager;
 import com.tsd.sano.es.modules.config.SyncTableConfig;
 import com.tsd.sano.es.modules.coordination.service.SyncDrainCoordinator;
-import com.tsd.sano.es.modules.index.EsIndexManager;
-import com.tsd.sano.es.modules.polling.model.SyncCheckpoint;
-import com.tsd.sano.es.modules.polling.service.PollingIndexService;
 import com.tsd.sano.es.modules.reconcile.service.ReconcileStatisticsService;
 import com.tsd.sano.es.modules.tplusone.model.ImportStatistics;
 import com.tsd.sano.es.modules.tplusone.model.SanoImportTask;
@@ -80,17 +77,7 @@ public class TPlusOneImportTask {
     private final EsServiceModeManager serviceModeManager;
 
     /**
-     * Polling持久恢复点服务，用于限制历史修复不能触碰当前同步日期
-     */
-    private final PollingIndexService pollingIndexService;
-
-    /**
-     * 物理索引管理组件，用于确认历史修复只覆盖已经存在的日索引
-     */
-    private final EsIndexManager indexManager;
-
-    /**
-     * 修复成功后的独立异步统计对账入口
+     * T+1任务成功后的独立异步统计对账入口
      */
     private final ReconcileStatisticsService reconcileStatisticsService;
 
@@ -104,8 +91,6 @@ public class TPlusOneImportTask {
                               @Qualifier("esImportExecutor") Executor esImportExecutor,
                               SyncDrainCoordinator drainCoordinator,
                               EsServiceModeManager serviceModeManager,
-                              PollingIndexService pollingIndexService,
-                              EsIndexManager indexManager,
                               ReconcileStatisticsService reconcileStatisticsService) {
         this.properties = properties;
         this.importService = importService;
@@ -114,8 +99,6 @@ public class TPlusOneImportTask {
         this.esImportExecutor = esImportExecutor;
         this.drainCoordinator = drainCoordinator;
         this.serviceModeManager = serviceModeManager;
-        this.pollingIndexService = pollingIndexService;
-        this.indexManager = indexManager;
         this.reconcileStatisticsService = reconcileStatisticsService;
     }
 
@@ -303,95 +286,6 @@ public class TPlusOneImportTask {
     }
 
     /**
-     * 为Polling表的已关闭历史日期提交一次T+1全量覆盖修复
-     *
-     * <p>修复复用现有任务索引和T+1导入管线，但只允许写入checkpoint当前日期之前已经存在的
-     * 物理索引全量upsert不会删除ES中多余文档，修复后的对账仍不一致时需要运维重建索引</p>
-     *
-     * @param tableName  MySQL源表名
-     * @param repairDate 已关闭的历史业务日期
-     * @return 任务提交结果
-     */
-    public String repairPollingDate(String tableName, LocalDate repairDate) {
-        requireEnabled();
-        if (!drainCoordinator.isAcceptingNewWork()) {
-            throw new ServiceException("Sync drain is active; new polling repair tasks are not accepted");
-        }
-
-        SyncTableConfig table = properties.getPollingTables().stream()
-                .filter(config -> StringUtils.equals(config.getTableName(), tableName))
-                .findFirst()
-                .orElseThrow(() -> new ServiceException(
-                        "ES sync table is disabled or mode mismatch, tableName=" + tableName
-                                + ", expectedMode=POLLING"));
-        SyncCheckpoint checkpoint = pollingIndexService.find(tableName)
-                .orElseThrow(() -> new ServiceException(
-                        "ES polling checkpoint does not exist, tableName=" + tableName));
-        if (checkpoint.getSyncDate() == null || !repairDate.isBefore(checkpoint.getSyncDate())) {
-            throw new ServiceException("Polling repair date must be earlier than checkpoint syncDate, tableName="
-                    + tableName + ", repairDate=" + repairDate
-                    + ", syncDate=" + checkpoint.getSyncDate());
-        }
-
-        String importDateText = IMPORT_DATE_FORMATTER.format(repairDate);
-        String indexName = table.getIndexAlias() + "_" + importDateText;
-        if (!indexManager.exists(indexName)) {
-            throw new ServiceException("Polling repair physical index does not exist, index=" + indexName);
-        }
-
-        SanoImportTask task = new SanoImportTask();
-        task.setTableName(tableName);
-        task.setIndexAlias(table.getIndexAlias());
-        task.setIndexName(indexName);
-        task.setImportDate(importDateText);
-        Boolean accepted = drainCoordinator.callIfAcceptingNewWork(
-                () -> importTaskService.addOrResetPollingRepairTask(task), null);
-        if (accepted == null) {
-            throw new ServiceException("Sync drain started while submitting polling repair task");
-        }
-        if (!accepted) {
-            throw new ServiceException("Polling repair task is still active "
-                    + "(PENDING/RUNNING/TIMEOUT_PARTIAL), taskId=" + task.getTaskId());
-        }
-
-        if (!drainCoordinator.tryStartTPlusOneDispatcher()) {
-            log.info("===> ES-TPlusOne polling repair task queued behind current dispatcher. taskId={}, index={}",
-                    task.getTaskId(), indexName);
-            return "Polling历史修复任务已入队，等待当前任务结束后执行taskId=" + task.getTaskId()
-                    + "；注意：全量upsert不会删除ES多余文档，对账仍不一致时需人工重建索引";
-        }
-
-        try {
-            esImportExecutor.execute(() -> {
-                try {
-                    long maxRunMillis = Math.max(1, properties.getTPlusOne().getMaxRunMinutes()) * 60L * 1000L;
-                    long deadlineMillis = System.currentTimeMillis() + maxRunMillis;
-                    log.info("===> ES-TPlusOne polling repair dispatcher start. taskId={}, index={}",
-                            task.getTaskId(), indexName);
-                    repairExpiredRunningTasks();
-                    runPendingTasks(deadlineMillis);
-                    log.info("===> ES-TPlusOne polling repair dispatcher finished. taskId={}, index={}",
-                            task.getTaskId(), indexName);
-                } catch (Exception error) {
-                    // 任务已经持久化，后台扫描提交后的异常只记录，后续定时扫描仍可继续处理
-                    log.error("===> ES-TPlusOne polling repair dispatcher failed. taskId={}, error={}",
-                            task.getTaskId(), error.getMessage(), error);
-                } finally {
-                    finishDispatcherAndResumeCancelledDrain();
-                }
-            });
-            return "Polling历史修复任务已提交taskId=" + task.getTaskId()
-                    + "；注意：全量upsert不会删除ES多余文档，对账仍不一致时需人工重建索引";
-        } catch (Exception error) {
-            finishDispatcherAndResumeCancelledDrain();
-            log.error("===> ES-TPlusOne polling repair dispatcher submit failed. taskId={}, error={}",
-                    task.getTaskId(), error.getMessage(), error);
-            return "Polling历史修复任务已入队，但后台扫描提交失败，等待下次任务扫描taskId="
-                    + task.getTaskId();
-        }
-    }
-
-    /**
      * 将超过运行窗口仍处于RUNNING的任务恢复为TIMEOUT_PARTIAL
      */
     private void repairExpiredRunningTasks() {
@@ -505,8 +399,6 @@ public class TPlusOneImportTask {
         }
         // 续跑任务从最后连续完成批次的安全断点后继续读取
         boolean resumeTask = StringUtils.equals(task.getStatus(), SanoImportTaskStatus.TIMEOUT_PARTIAL.name());
-        // Polling历史修复任务不依赖任务索引的新增字段，必须在执行前重新识别表模式和日期边界
-        boolean pollingRepair = false;
         ImportStatistics statistics = null;
         SanoImportTaskStatus terminalStatus = null;
         boolean persistenceSafe = false;
@@ -514,40 +406,7 @@ public class TPlusOneImportTask {
         String terminalError = null;
         try {
             LocalDate importDate = LocalDate.parse(task.getImportDate(), IMPORT_DATE_FORMATTER);
-            SyncTableConfig table = properties.getTPlusOneTables().stream()
-                    .filter(config -> StringUtils.equals(config.getTableName(), task.getTableName()))
-                    .findFirst()
-                    .orElse(null);
-            // 如果T+1表配置被禁用或模式不匹配，尝试从Polling表配置中识别
-            if (table == null) {
-                // Polling历史修复没有新增任务类型字段，因此执行前必须依靠当前表模式和日期边界重新识别
-                table = properties.getPollingTables().stream()
-                        .filter(config -> StringUtils.equals(config.getTableName(), task.getTableName()))
-                        .findFirst()
-                        .orElseThrow(() -> new ServiceException(
-                                "ES sync task table is disabled or mode mismatch, tableName="
-                                        + task.getTableName()));
-                SyncCheckpoint checkpoint = pollingIndexService.find(task.getTableName())
-                        .orElseThrow(() -> new ServiceException(
-                                "ES polling checkpoint does not exist, tableName=" + task.getTableName()));
-                if (checkpoint.getSyncDate() == null || !importDate.isBefore(checkpoint.getSyncDate())) {
-                    throw new ServiceException(
-                            "Polling repair date must be earlier than checkpoint syncDate, tableName="
-                                    + task.getTableName() + ", repairDate=" + importDate
-                                    + ", syncDate=" + checkpoint.getSyncDate());
-                }
-                String expectedIndexName = table.getIndexAlias() + "_" + IMPORT_DATE_FORMATTER.format(importDate);
-                if (!StringUtils.equals(task.getIndexAlias(), table.getIndexAlias())
-                        || !StringUtils.equals(task.getIndexName(), expectedIndexName)) {
-                    throw new ServiceException("Polling repair task index does not match current table config, taskId="
-                            + task.getTaskId() + ", expectedIndex=" + expectedIndexName);
-                }
-                if (!indexManager.exists(expectedIndexName)) {
-                    throw new ServiceException(
-                            "Polling repair physical index does not exist, index=" + expectedIndexName);
-                }
-                pollingRepair = true;
-            }
+            SyncTableConfig table = properties.requireTPlusOneTable(task.getTableName());
 
             TPlusOneImportConfig config = new TPlusOneImportConfig();
             config.setIndexAlias(task.getIndexAlias());
@@ -609,13 +468,11 @@ public class TPlusOneImportTask {
             persistenceSafe = true;
             notifyService.notifySuccess(task, statistics);
             try {
-                // 普通T+1和Polling历史修复共用独立异步对账；提交失败不能覆盖已持久化的SUCCESS
+                // 对账是独立异步副作用；提交失败不能覆盖已经持久化的SUCCESS任务终态。
                 reconcileStatisticsService.reconcile(table, importDate);
             } catch (RuntimeException reconcileError) {
-                log.warn("===> ES-TPlusOne reconcile submit failed after task success. "
-                                + "taskId={}, pollingRepair={}, error={}",
-                        task.getTaskId(), pollingRepair,
-                        reconcileError.getMessage(), reconcileError);
+                log.warn("===> ES-TPlusOne reconcile submit failed after task success. taskId={}, error={}",
+                        task.getTaskId(), reconcileError.getMessage(), reconcileError);
             }
         } catch (Exception e) {
             terminalError = StringUtils.left(e.getMessage(), 1000);

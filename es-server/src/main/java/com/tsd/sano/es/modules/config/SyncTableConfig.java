@@ -4,7 +4,6 @@ import lombok.Getter;
 import lombok.Setter;
 import org.apache.commons.lang3.StringUtils;
 
-import java.time.LocalDate;
 import java.util.Locale;
 
 /**
@@ -18,16 +17,6 @@ public class SyncTableConfig {
      * 是否启用该表。
      */
     private boolean enabled = true;
-
-    /**
-     * 单表自动同步模式；未配置时保持原有T+1行为。
-     */
-    private TableSyncMode syncMode = TableSyncMode.T_PLUS_ONE;
-
-    /**
-     * Polling首次启动日期，T+1模式忽略该字段。
-     */
-    private LocalDate bootstrapStartDate;
 
     /**
      * 是否执行该表的异步统计对账；同步流程仍统一调用，由对账入口决定是否执行。
@@ -85,9 +74,6 @@ public class SyncTableConfig {
      * <p>该方法在配置绑定阶段对启用表执行；运行时读取到的具体数据类型仍由Reader校验。</p>
      */
     void normalizeAndValidate() {
-        TableSyncMode normalizedSyncMode = syncMode == null
-                ? TableSyncMode.T_PLUS_ONE
-                : syncMode;
         String normalizedTableName = StringUtils.trimToEmpty(tableName);
         String normalizedIndexAlias =
                 StringUtils.defaultIfBlank(indexAlias, normalizedTableName).trim();
@@ -114,20 +100,6 @@ public class SyncTableConfig {
                     "ES sync table reserve-days cannot be negative, tableName=" + normalizedTableName);
         }
 
-        if (normalizedSyncMode == TableSyncMode.POLLING) {
-            if (bootstrapStartDate == null) {
-                throw new IllegalStateException(
-                        "ES polling table bootstrap-start-date cannot be null, tableName="
-                                + normalizedTableName);
-            }
-            if (bootstrapStartDate.isAfter(LocalDate.now())) {
-                throw new IllegalStateException(
-                        "ES polling table bootstrap-start-date cannot be in the future, tableName="
-                                + normalizedTableName + ", value=" + bootstrapStartDate);
-            }
-        }
-
-        syncMode = normalizedSyncMode;
         tableName = normalizedTableName;
         indexAlias = normalizedIndexAlias;
         mappingFile = normalizedMappingFile;

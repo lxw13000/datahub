@@ -8,7 +8,6 @@ import co.elastic.clients.elasticsearch.core.bulk.BulkResponseItem;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.tsd.sano.es.core.exception.ServiceException;
 import com.tsd.sano.es.modules.config.EsImportProperties;
-import com.tsd.sano.es.modules.config.TableSyncMode;
 import com.tsd.sano.es.modules.coordination.service.GlobalEsWritePermitManager;
 import com.tsd.sano.es.modules.tplusone.model.ImportBatch;
 import com.tsd.sano.es.modules.tplusone.model.ImportContext;
@@ -246,7 +245,7 @@ public class TPlusOneBulkWriter {
                 BulkResponse response;
                 // 许可证只覆盖真实ES请求时间，响应统计和重试等待均不占用全局并发额度。
                 try (GlobalEsWritePermitManager.Permit ignored =
-                             writePermitManager.acquire(TableSyncMode.T_PLUS_ONE)) {
+                             writePermitManager.acquire()) {
                     response = client.bulk(request);
                 }
                 long costMs = System.currentTimeMillis() - startTime;

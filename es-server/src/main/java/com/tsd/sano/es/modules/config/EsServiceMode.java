@@ -7,8 +7,8 @@ import java.util.Locale;
 /**
  * 当前实例承担的服务职责
  *
- * <p>所有模式均开放查询并注册相同BeanALL额外启用同步能力，QUERY仅关闭
- * T+1和polling同步任务、Reader、Worker及写入链路</p>
+ * <p>所有模式均开放查询并注册相同Bean；ALL额外启用T+1能力，QUERY关闭
+ * T+1任务、Reader、Bulk Worker及写入链路。</p>
  */
 public enum EsServiceMode {
 
@@ -22,7 +22,7 @@ public enum EsServiceMode {
     }
 
     /**
-     * 是否启用T+1或polling同步能力
+     * 是否启用T+1同步能力
      */
     public boolean isSyncEnabled() {
         return syncEnabled;
