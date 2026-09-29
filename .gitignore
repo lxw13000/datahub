@@ -50,3 +50,12 @@ uploads/
 /tools/platform-subsidy-analysis/*.json
 /tools/platform-subsidy-analysis/*.xlsx
 /tools/first-recharge-analysis/*.xlsx
+/tools/blind-box-analysis/*.json
+!/tools/blind-box-analysis/config.example.json
+!/tools/blind-box-analysis/box-prices.json
+/tools/blind-box-analysis/config.json
+/tools/blind-box-analysis/*.xlsx
+/tools/blind-box-analysis/generated-queries/
+/tools/blind-box-analysis/queries-*/
+/tools/blind-box-analysis/responses/
+/tools/blind-box-analysis/__pycache__/
