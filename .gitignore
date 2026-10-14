@@ -46,7 +46,27 @@ uploads/
 
 # 本地分析工具的输入与输出
 /tools/withdraw-diamond-analysis/*.json
+!/tools/withdraw-diamond-analysis/es-config.example.json
+!/tools/withdraw-diamond-analysis/analysis-config.example.json
+/tools/withdraw-diamond-analysis/*.csv
 /tools/withdraw-diamond-analysis/*.xlsx
+/tools/withdraw-diamond-analysis/.withdraw-analysis-*.parts/
+/tools/withdraw-diamond-analysis/responses/
+/tools/withdraw-diamond-analysis/__pycache__/
+/tools/user-consumption-analysis/*.json
+!/tools/user-consumption-analysis/es-config.example.json
+!/tools/user-consumption-analysis/analysis-config.example.json
+/tools/user-consumption-analysis/*.csv
+!/tools/user-consumption-analysis/user-ids.example.csv
+/tools/user-consumption-analysis/*.xlsx
+/tools/user-consumption-analysis/.user-consumption-*.parts/
+/tools/user-consumption-analysis/__pycache__/
+/tools/country-user-cohort-analysis/*.json
+!/tools/country-user-cohort-analysis/*-config.example.json
+/tools/country-user-cohort-analysis/*.xlsx
+/tools/country-user-cohort-analysis/*.sql
+/tools/country-user-cohort-analysis/.country-user-cohort-*.parts/
+/tools/country-user-cohort-analysis/__pycache__/
 /tools/platform-subsidy-analysis/*.json
 /tools/platform-subsidy-analysis/*.xlsx
 /tools/first-recharge-analysis/*.xlsx

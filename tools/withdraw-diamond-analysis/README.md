@@ -1,16 +1,10 @@
 # 提现用户钻石来源、用途分析工具
 
-这是一个独立的本地 Python 命令行工具。它读取
-`/walletDiamond/withdrawAnalysis` 接口返回的扁平 JSON，按用户、余额变化方向和业务类型汇总，
-再生成结构化 Excel 分析报告。工具不依赖 Spring Boot，也不会修改 `es-server`。
+独立的本地 Python 工具。你提供完整的提现用户 ID CSV；工具连接 ES，按用户、余额方向和业务类型汇总指定时间内的钻石流水，保存扁平 JSON，并生成五张工作表的 Excel 报告。不连接 MySQL，不依赖 Spring Boot，也不修改 `es-server`。
 
-## 环境与安装
+## 安装
 
-建议使用 Python 3.10 或更高版本。
-
-### 使用现有 Conda 环境（推荐）
-
-在 Anaconda Prompt 或 CMD 中进入工具目录并激活 `luckyEv`：
+在 Anaconda Prompt 或 CMD 中执行：
 
 ```bat
 cd /d C:\work\opts\sano\code\datahub\tools\withdraw-diamond-analysis
@@ -19,79 +13,11 @@ python --version
 python -m pip install -r requirements.txt
 ```
 
-如果安装依赖时提示 `No module named pip`，先执行：
+若提示 `No module named pip`，先执行 `conda install -n luckyEv pip`。唯一的第三方依赖是 `openpyxl>=3.1,<4`；连接 ES 使用 Python 标准库。
 
-```bat
-conda install -n luckyEv pip
-python -m pip install -r requirements.txt
-```
+## 准备用户 ID 文件
 
-安装完成后可以检查实际使用的 Python 和 `openpyxl`：
-
-```bat
-where python
-python -c "import openpyxl; print(openpyxl.__version__)"
-```
-
-### 使用独立 venv（可选）
-
-```powershell
-cd C:\work\opts\sano\code\datahub\tools\withdraw-diamond-analysis
-python -m venv .venv
-.\.venv\Scripts\Activate.ps1
-python -m pip install -r requirements.txt
-```
-
-运行时唯一的第三方依赖是 `openpyxl`。
-
-## 准备接口 JSON
-
-把接口完整响应保存为 UTF-8 JSON 文件，例如 `withdraw-analysis.json`：
-
-```json
-{
-  "code": 200,
-  "data": [
-    {
-      "userId": 11019438,
-      "status": 1,
-      "businessType": 2,
-      "tokens": 20650000
-    },
-    {
-      "userId": 11019438,
-      "status": -1,
-      "businessType": 53,
-      "tokens": 100000000
-    }
-  ],
-  "success": true
-}
-```
-
-也支持直接使用数组作为根节点：
-
-```json
-[
-  {
-    "userId": 11019438,
-    "status": 1,
-    "businessType": 2,
-    "tokens": 20650000
-  }
-]
-```
-
-`userId`、`status`、`businessType` 和 `tokens` 必须是整数或整数字符串。工具会拒绝 JSON
-小数，并始终使用 Python 整数参与汇总，不会先转换为浮点数。`status=1` 表示加余额，
-`status=-1` 表示减余额。输入中重复的 `userId + status + businessType` 会自动合并。
-
-## 可选的提现用户 ID 文件
-
-接口只返回存在钻石流水的组合。若还需要在“用户汇总”中保留没有钻石流水的提现用户，
-请准备 CSV 文件并通过 `--user-ids` 传入。
-
-推荐格式：
+用户 ID CSV 是本次分析的**完整提现用户名单**，包括没有钻石流水的用户。推荐单列格式：
 
 ```csv
 userId
@@ -100,65 +26,86 @@ userId
 11041900
 ```
 
-也支持没有表头的单列 CSV。第一列必须是完整整数 ID，不要使用科学计数法。空行和重复 ID
-会被忽略。
+目录中已放置 [withdraw-user-ids.csv](withdraw-user-ids.csv) 示例，里面的 `10000001`、`10000002` 是占位 ID，运行前请替换为真实名单。也接受无表头的单列 CSV。空行、重复 ID 会忽略；第一列必须是完整整数 ID，不要使用科学计数法。若文件没有任何有效 ID，程序会报错并停止，不会查询 ES 或生成报表。工具不会根据提现时间自动查询 MySQL，因此你应先按提现时间范围导出正确名单。
 
-## 完整执行命令
+## 配置与执行
 
-### Anaconda Prompt / CMD 单行命令
-
-激活 Conda 环境后，可以直接复制以下整行执行：
+ES 连接与分析口径分别配置。复制两个示例文件：
 
 ```bat
-python .\export_report.py --input .\withdraw-analysis.json --output ".\提现用户钻石来源用途分析2.xlsx" --user-ids .\withdraw-user-ids.csv --withdraw-start "2026-07-20 00:00:00" --withdraw-end "2026-07-31 23:59:59" --statistics-start "2026-07-01 00:00:00" --statistics-end "2026-07-31 23:59:59"
+copy .\es-config.example.json .\es-config.json
+copy .\analysis-config.example.json .\analysis-config.json
 ```
 
-包含业务类型排除参数的单行示例：
+`es-config.json` 只填写连接信息：
+
+```json
+{
+  "es_url": "https://your-es-host:9200",
+  "username": "your_username",
+  "password": "your_password",
+  "timeout_seconds": 300
+}
+```
+
+`analysis-config.json` 只填写本次分析的名单和时间口径：
+
+```json
+{
+  "user_ids_file": "withdraw-user-ids.csv",
+  "withdraw_start": "2026-07-20 00:00:00",
+  "withdraw_end": "2026-07-31 23:59:59",
+  "statistics_start": "2026-07-01 00:00:00",
+  "statistics_end": "2026-07-31 23:59:59",
+  "exclude_business_types": [74, 503]
+}
+```
+
+`user_ids_file` 的相对路径以 `analysis-config.json` 所在目录为基准。`withdraw_start`、`withdraw_end` 仅说明 CSV 名单的来源范围并写入报表，**不会在 ES 中筛选用户**；`statistics_start`、`statistics_end` 用于 ES `create_time` 查询，起止时刻均包含。`exclude_business_types` 同时用于 ES 查询和报表口径。无认证的 ES 可将 `username`、`password` 都设为空字符串。HTTPS 默认校验证书；使用私有 CA 时可在 `es-config.json` 加 `"ca_cert": "ca.pem"`，路径相对于该配置文件，不建议关闭验证。
+
+填写完成后，在 CMD 或 Anaconda Prompt 中运行单行命令：
 
 ```bat
-python .\export_report.py --input .\withdraw-analysis.json --output ".\提现用户钻石来源用途分析2.xlsx" --user-ids .\withdraw-user-ids.csv --withdraw-start "2026-07-20 00:00:00" --withdraw-end "2026-07-31 23:59:59" --statistics-start "2026-07-01 00:00:00" --statistics-end "2026-07-31 23:59:59" --exclude-business-types 74 503
+python .\export_report.py --es-config .\es-config.json --analysis-config .\analysis-config.json
 ```
 
-Anaconda Prompt 默认使用 CMD 语法。若确实需要多行命令，续行符是 `^`；PowerShell 的反引号
-`` ` `` 在 CMD 中不会续行，因此最稳妥的方式是使用上面的单行命令。
+现在不需要 `--input`，也不需要手动调用 `/walletDiamond/withdrawAnalysis`。`es-config.json` 含明文密码，用户 CSV 和响应 JSON 含用户数据；这些文件已加入 `.gitignore`，请勿提交或分享。
 
-### PowerShell 多行命令
+若运行中断，确认两个配置文件及用户 ID CSV **未改变**，用原命令加 `--resume`：
 
-以下 PowerShell 命令同时演示用户 ID 文件和业务类型排除参数：
-
-```powershell
-python .\export_report.py `
-  --input .\withdraw-analysis.json `
-  --output .\提现用户钻石来源用途分析.xlsx `
-  --user-ids .\withdraw-user-ids.csv `
-  --withdraw-start "2026-07-01 00:00:00" `
-  --withdraw-end "2026-07-31 23:59:59" `
-  --statistics-start "2026-01-01 00:00:00" `
-  --statistics-end "2026-07-31 23:59:59" `
-  --exclude-business-types 74 503
+```bat
+python .\export_report.py --es-config .\es-config.json --analysis-config .\analysis-config.json --resume
 ```
 
-不需要保留零流水用户时，省略 `--user-ids`。不需要在本地再次排除业务类型时，省略
-`--exclude-business-types`。排除编号也可以使用逗号分隔，例如
-`--exclude-business-types 74,503`。
+工具按每 1,000 个用户保存一个完整批次检查点；续跑会跳过已完成的批次，未完成的当前批次会重新查询。续跑清单会核对 ES 地址、时间范围、排除业务类型、用户名单哈希及查询 DSL 哈希，不会混用不同口径，也不保存密码。`--resume` 要求同一口径恰好有一个未完成批次；如果存在多个未完成批次，先人工核对并移开不需要的批次文件。正常完成的报表不能用 `--resume` 覆盖；重新执行不加该参数会生成新的时间戳文件。
 
-四个时间参数会原样写入报告顶部，并按接口使用的 `yyyy-MM-dd HH:mm:ss` 格式校验。
-它们用于记录本次查询口径；本地工具不会根据时间二次过滤，因为接口扁平结果中不含流水时间。
-`--exclude-business-types` 会在本地再次过滤输入，因此即使接口请求时已经排除，也可以把同一组
-编号写入报告口径。
+## 查询与输出口径
 
-如果目标文件已经存在，工具会用新报告替换它。
+工具按 1,000 个用户一批查询 `sano_wallet_diamond_record` 索引别名，使用 ES composite 聚合完整翻页，聚合键为 `user_id + status + business_type`，汇总字段为整数 `tokens`。`status=1` 表示加余额，`status=-1` 表示减余额。原始流水不会逐条下载。查询超时、分片失败、聚合结果不完整或数值超出 ES 浮点安全整数范围时，工具报错且不生成新的报表；这时可以在相同口径下续跑，或缩短统计时段新开一次分析，不要把异常结果当作完整数据。
 
-## 输出工作表
+**美元换算只在最终写 Excel 时进行**：`10,000,000 tokens = 1 美元`，先按整数 tokens 完成所有汇总，再用十进制算法四舍五入到 3 位小数。ES 聚合和导出的 JSON 都不换算；报表中的美元列以 3 位小数显示。各行美元显示值经过独立舍入，极小金额下相加可能与总计美元相差千分之一美元；应以先汇总 tokens 再换算的总计为准。
 
-- **分析汇总**：查询条件、核心指标、按方向和业务类型的用户数/Tokens/占比、三组 Top 20、
-  最大用户占比，以及剔除该用户后的加余额、减余额和净额。
-- **用户汇总**：每个用户的加余额、减余额、净额、业务数和业务明细；通过 ID 文件补入的零流水
-  用户也会出现在这里。
-- **加余额明细**：按 `userId + businessType` 合并后的加余额记录。
-- **减余额明细**：按 `userId + businessType` 合并后的减余额记录。
-- **业务类型汇总**：方向、业务类型、中文备注、涉及用户数、Tokens 总数和方向内占比。
+运行结果**直接保存在 `export_report.py` 同级目录**，无需配置输出路径。每次运行自动附加时间戳，避免覆盖已有文件：
 
-用户 ID 使用普通整数格式，不显示千分位；Tokens 使用千分位。净额负数显示为红色，正数显示为
-绿色。数据表均冻结表头、启用筛选，并设置了适合查看的列宽和数字格式。业务类型中文名称来自
-当前 `EBusinessType` 枚举；遇到新编号时会显示“未知业务类型”，但不会阻止报告生成。
+- `withdraw-analysis-时间戳.json`：与原接口兼容的 `{"code":200,"data":[...],"success":true}` 扁平汇总 JSON。每条含 `userId`、`status`、`businessType`、`tokens`。
+- `withdraw-analysis-manifest-时间戳.json`：ES 地址（不含密码）、查询时间、排除类型、用户数、用户 ID 哈希和聚合记录数，用于核对批次口径。
+- `提现用户钻石来源用途分析-时间戳.xlsx`：Excel 分析报告。
+- `.withdraw-analysis-时间戳.parts`：续跑检查点目录，每个文件对应一个完整的用户批次；请在报表生成前保留。
+
+Excel 保留原来的五张工作表：
+
+1. **分析汇总**：查询条件、核心指标、按方向和业务类型的用户数／Tokens／美元／占比、三组 Top 20、最大用户占比及剔除影响。
+2. **用户汇总**：每个用户的加余额、减余额、净额（均有 Tokens 和美元）、业务数和业务明细；零流水用户也在其中。
+3. **加余额明细**：按 `userId + businessType` 汇总 Tokens 与美元。
+4. **减余额明细**：按 `userId + businessType` 汇总 Tokens 与美元。
+5. **业务类型汇总**：方向、业务类型、涉及用户数、Tokens、美元及方向内占比。
+
+用户 ID 不显示千分位，Tokens 显示千分位，净额负数标红、正数标绿。工作表保留可见网格线，表头及数据区使用清晰的浅灰边框，冻结表头并设置筛选。业务类型中文名称由工具内的映射表提供；未知编号显示“未知业务类型”。
+
+## 本地验证
+
+```bat
+python -m unittest discover -s . -p "test_*.py" -v
+```
+
+测试使用模拟 ES 响应，不需要真实 ES 账号。实际连接和查询需在填写自己的两个配置文件后执行。

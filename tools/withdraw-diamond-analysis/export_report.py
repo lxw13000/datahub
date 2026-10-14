@@ -6,10 +6,10 @@ from __future__ import annotations
 import argparse
 import csv
 import json
-import os
 import re
 import sys
 from collections import defaultdict
+from decimal import Decimal, ROUND_HALF_UP
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Iterable
@@ -121,41 +121,27 @@ TITLE_FILL = PatternFill("solid", fgColor="1F4E78")
 SECTION_FILL = PatternFill("solid", fgColor="D9EAF7")
 HEADER_FILL = PatternFill("solid", fgColor="5B9BD5")
 LIGHT_FILL = PatternFill("solid", fgColor="EAF2F8")
-WHITE_FONT = Font(color="FFFFFF", bold=True)
 HEADER_FONT = Font(color="FFFFFF", bold=True)
 LABEL_FONT = Font(color="1F1F1F", bold=True)
 BODY_FONT = Font(color="1F1F1F")
 NEGATIVE_FONT = Font(color="C00000")
 POSITIVE_FONT = Font(color="008000")
-LIGHT_SIDE = Side(style="thin", color="D9E2F3")
-BOTTOM_BORDER = Border(bottom=LIGHT_SIDE)
+LIGHT_SIDE = Side(style="thin", color="B7C5D3")
+CELL_BORDER = Border(left=LIGHT_SIDE, right=LIGHT_SIDE, top=LIGHT_SIDE, bottom=LIGHT_SIDE)
 TOKEN_FORMAT = "#,##0"
 USER_ID_FORMAT = "0"
 PERCENT_FORMAT = "0.00%"
+USD_FORMAT = '"$"#,##0.000;[Red]("$"#,##0.000)'
+TOKENS_PER_USD = Decimal(10_000_000)
 
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
-        description="将 /walletDiamond/withdrawAnalysis 返回的 JSON 导出为 Excel 分析报告。"
+        description="按配置连接 ES，导出提现用户钻石汇总 JSON 与 Excel 报告。"
     )
-    parser.add_argument("--input", required=True, type=Path, help="接口结果 JSON 文件")
-    parser.add_argument("--output", required=True, type=Path, help="输出 .xlsx 文件")
-    parser.add_argument(
-        "--user-ids",
-        type=Path,
-        help="可选的提现用户 ID CSV，用于保留没有钻石流水的用户",
-    )
-    parser.add_argument("--withdraw-start", required=True, help="提现开始时间")
-    parser.add_argument("--withdraw-end", required=True, help="提现结束时间")
-    parser.add_argument("--statistics-start", required=True, help="钻石统计开始时间")
-    parser.add_argument("--statistics-end", required=True, help="钻石统计结束时间")
-    parser.add_argument(
-        "--exclude-business-types",
-        nargs="*",
-        default=[],
-        metavar="TYPE",
-        help="可选；空格或逗号分隔的业务类型编号，例如 74 503 或 74,503",
-    )
+    parser.add_argument("--es-config", required=True, type=Path, help="ES 连接配置 JSON")
+    parser.add_argument("--analysis-config", required=True, type=Path, help="用户与统计口径配置 JSON")
+    parser.add_argument("--resume", action="store_true", help="续跑相同口径的未完成批次，跳过已保存的用户批次")
     return parser.parse_args()
 
 
@@ -204,9 +190,9 @@ def load_records(path: Path) -> list[dict[str, Any]]:
     return records
 
 
-def load_user_ids(path: Path | None) -> set[int]:
+def load_user_ids(path: Path) -> set[int]:
     if path is None:
-        return set()
+        raise ValueError("必须提供提现用户 ID CSV 文件")
     if not path.is_file():
         raise ValueError(f"用户 ID 文件不存在或不是文件：{path}")
 
@@ -235,18 +221,6 @@ def load_user_ids(path: Path | None) -> set[int]:
     except (OSError, UnicodeDecodeError, csv.Error) as error:
         raise ValueError(f"读取用户 ID 文件失败：{error}") from error
     return user_ids
-
-
-def parse_excluded_business_types(values: Iterable[str]) -> set[int]:
-    excluded: set[int] = set()
-    for argument in values:
-        for item in argument.split(","):
-            item = item.strip()
-            if item:
-                excluded.add(
-                    parse_integer(item, "businessType", "--exclude-business-types", minimum=0)
-                )
-    return excluded
 
 
 def validate_times(args: argparse.Namespace) -> None:
@@ -300,6 +274,11 @@ def aggregate_records(
 
 def business_name(business_type: int) -> str:
     return BUSINESS_TYPE_NAMES.get(business_type, "未知业务类型")
+
+
+def tokens_to_usd(tokens: int) -> float:
+    """仅在写报表时换算；先用 Decimal 四舍五入，ES/JSON 始终保存整数 tokens。"""
+    return float((Decimal(tokens) / TOKENS_PER_USD).quantize(Decimal("0.001"), rounding=ROUND_HALF_UP))
 
 
 def build_analysis(
@@ -407,7 +386,7 @@ def style_header(ws, row: int, start_column: int, end_column: int) -> None:
         current.fill = HEADER_FILL
         current.font = HEADER_FONT
         current.alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
-        current.border = BOTTOM_BORDER
+        current.border = CELL_BORDER
     ws.row_dimensions[row].height = 30
 
 
@@ -422,8 +401,8 @@ def style_section(ws, row: int, title: str, end_column: int) -> None:
         ws.cell(row, column).fill = SECTION_FILL
 
 
-def style_net_cell(cell) -> None:
-    cell.number_format = TOKEN_FORMAT
+def style_net_cell(cell, number_format: str = TOKEN_FORMAT) -> None:
+    cell.number_format = number_format
     if cell.value < 0:
         cell.font = NEGATIVE_FONT
     elif cell.value > 0:
@@ -435,20 +414,24 @@ def format_data_sheet(
     widths: list[float],
     numeric_columns: Iterable[int],
     user_id_columns: Iterable[int] = (1,),
+    usd_columns: Iterable[int] = (),
+    text_start_column: int | None = None,
 ) -> None:
     ws.freeze_panes = "A2"
     ws.auto_filter.ref = f"A1:{get_column_letter(ws.max_column)}{max(1, ws.max_row)}"
-    ws.sheet_view.showGridLines = False
+    ws.sheet_view.showGridLines = True
     style_header(ws, 1, 1, ws.max_column)
     for column, width in enumerate(widths, start=1):
         ws.column_dimensions[get_column_letter(column)].width = width
     for row in ws.iter_rows(min_row=2):
         for cell in row:
-            cell.border = BOTTOM_BORDER
-            cell.alignment = Alignment(vertical="top", wrap_text=cell.column >= 7)
+            cell.border = CELL_BORDER
+            cell.alignment = Alignment(vertical="top", wrap_text=text_start_column is not None and cell.column >= text_start_column)
             cell.font = BODY_FONT
         for column in numeric_columns:
             row[column - 1].number_format = TOKEN_FORMAT
+        for column in usd_columns:
+            row[column - 1].number_format = USD_FORMAT
         for column in user_id_columns:
             row[column - 1].number_format = USER_ID_FORMAT
     ws.sheet_properties.pageSetUpPr.fitToPage = True
@@ -477,15 +460,15 @@ def write_summary_sheet(
     expense_business = [row for row in business_rows if row["status"] == -1]
 
     ws.title = "分析汇总"
-    ws.sheet_view.showGridLines = False
+    ws.sheet_view.showGridLines = True
     ws.freeze_panes = "A6"
-    ws.merge_cells("A1:N1")
+    ws.merge_cells("A1:O1")
     ws["A1"] = "提现用户钻石来源、用途分析"
     ws["A1"].fill = TITLE_FILL
     ws["A1"].font = Font(color="FFFFFF", bold=True, size=18)
     ws["A1"].alignment = Alignment(horizontal="center", vertical="center")
     ws.row_dimensions[1].height = 38
-    for column in range(1, 15):
+    for column in range(1, 16):
         ws.cell(1, column).fill = TITLE_FILL
 
     ws["A2"] = "提现用户范围"
@@ -513,7 +496,7 @@ def write_summary_sheet(
     ws["A4"] = "提现用户 ID 文件"
     ws.merge_cells("B4:J4")
     ws["B4"] = args.user_ids.name if args.user_ids else "未提供"
-    ws["K4"] = "原始/汇总记录数"
+    ws["K4"] = "聚合桶/汇总数"
     ws.merge_cells("L4:N4")
     ws["L4"] = f"{raw_record_count:,} / {len(analysis['details']) and sum(len(v[1]) + len(v[-1]) for v in analysis['details'].values()):,}"
 
@@ -521,9 +504,9 @@ def write_summary_sheet(
         for column in (1, 6, 11):
             ws.cell(row, column).font = LABEL_FONT
             ws.cell(row, column).fill = LIGHT_FILL
-        for column in range(1, 15):
+        for column in range(1, 16):
             ws.cell(row, column).alignment = Alignment(vertical="center", wrap_text=True)
-            ws.cell(row, column).border = BOTTOM_BORDER
+            ws.cell(row, column).border = CELL_BORDER
         ws.row_dimensions[row].height = 25
 
     first_headers = ["提现用户数", "加余额总数", "减余额总数", "净额", "无加余额用户数"]
@@ -554,7 +537,15 @@ def write_summary_sheet(
     for column, (header, value) in enumerate(zip(second_headers, second_values), start=1):
         ws.cell(8, column, header)
         ws.cell(9, column, value)
+    for column, (header, value) in enumerate((
+        ("加余额美元", totals["income"]),
+        ("减余额美元", totals["expense"]),
+        ("净额美元", totals["net"]),
+    ), start=6):
+        ws.cell(6, column, header)
+        ws.cell(7, column, tokens_to_usd(value))
     style_header(ws, 6, 1, 5)
+    style_header(ws, 6, 6, 8)
     style_header(ws, 8, 1, 5)
     for row in (7, 9):
         for column in range(1, 6):
@@ -562,20 +553,29 @@ def write_summary_sheet(
             cell.number_format = TOKEN_FORMAT
             cell.font = Font(size=12, bold=True)
             cell.alignment = Alignment(horizontal="right")
-            cell.border = BOTTOM_BORDER
+            cell.border = CELL_BORDER
     style_net_cell(ws["D7"])
+    for column in (6, 7):
+        ws.cell(7, column).number_format = USD_FORMAT
+        ws.cell(7, column).border = CELL_BORDER
+        ws.cell(7, column).font = Font(size=12, bold=True)
+    ws["H7"].border = CELL_BORDER
+    style_net_cell(ws["H7"], USD_FORMAT)
+    ws["A10"] = "换算口径：10,000,000 tokens = 1 美元；仅报表阶段换算，显示 3 位小数"
+    ws.merge_cells("A10:I10")
+    ws["A10"].font = Font(color="596579", italic=True)
 
     business_section = 11
-    style_section(ws, business_section, "各方向业务类型构成", 14)
+    style_section(ws, business_section, "各方向业务类型构成", 15)
     business_header = business_section + 1
-    income_headers = ["加余额业务类型", "涉及用户数", "Tokens总数", "方向内占比"]
-    expense_headers = ["减余额业务类型", "涉及用户数", "Tokens总数", "方向内占比"]
+    income_headers = ["加余额业务类型", "涉及用户数", "Tokens总数", "美元", "方向内占比"]
+    expense_headers = ["减余额业务类型", "涉及用户数", "Tokens总数", "美元", "方向内占比"]
     for column, header in enumerate(income_headers, start=1):
         ws.cell(business_header, column, header)
     for column, header in enumerate(expense_headers, start=6):
         ws.cell(business_header, column, header)
-    style_header(ws, business_header, 1, 4)
-    style_header(ws, business_header, 6, 9)
+    style_header(ws, business_header, 1, 5)
+    style_header(ws, business_header, 6, 10)
 
     business_data_start = business_header + 1
     for offset in range(max(len(income_business), len(expense_business), 1)):
@@ -585,6 +585,7 @@ def write_summary_sheet(
                 f"{row['business_type']}（{row['name']}）",
                 row["user_count"],
                 row["tokens"],
+                tokens_to_usd(row["tokens"]),
                 row["share"],
             ]
             for column, value in enumerate(values, start=1):
@@ -595,53 +596,58 @@ def write_summary_sheet(
                 f"{row['business_type']}（{row['name']}）",
                 row["user_count"],
                 row["tokens"],
+                tokens_to_usd(row["tokens"]),
                 row["share"],
             ]
             for column, value in enumerate(values, start=6):
                 ws.cell(business_data_start + offset, column, value)
-        for column in list(range(1, 5)) + list(range(6, 10)):
-            ws.cell(business_data_start + offset, column).border = BOTTOM_BORDER
+        for column in list(range(1, 6)) + list(range(6, 11)):
+            ws.cell(business_data_start + offset, column).border = CELL_BORDER
     for row in range(business_data_start, business_data_start + max(len(income_business), 1)):
         ws.cell(row, 2).number_format = TOKEN_FORMAT
         ws.cell(row, 3).number_format = TOKEN_FORMAT
-        ws.cell(row, 4).number_format = PERCENT_FORMAT
+        ws.cell(row, 4).number_format = USD_FORMAT
+        ws.cell(row, 5).number_format = PERCENT_FORMAT
     for row in range(business_data_start, business_data_start + max(len(expense_business), 1)):
         ws.cell(row, 7).number_format = TOKEN_FORMAT
         ws.cell(row, 8).number_format = TOKEN_FORMAT
-        ws.cell(row, 9).number_format = PERCENT_FORMAT
+        ws.cell(row, 9).number_format = USD_FORMAT
+        ws.cell(row, 10).number_format = PERCENT_FORMAT
 
     top_section = business_data_start + max(len(income_business), len(expense_business), 1) + 1
-    style_section(ws, top_section, "用户排名（最多 20 名）", 14)
+    style_section(ws, top_section, "用户排名（最多 20 名）", 15)
     top_header = top_section + 1
     table_headers = [
-        (1, ["加余额排名", "用户ID", "加余额总数", "净额"]),
-        (6, ["减余额排名", "用户ID", "减余额总数", "净额"]),
-        (11, ["净额最低排名", "用户ID", "净额", "加/减余额"]),
+        (1, ["加余额排名", "用户ID", "加余额Tokens", "净额Tokens", "加余额美元"]),
+        (6, ["减余额排名", "用户ID", "减余额Tokens", "净额Tokens", "减余额美元"]),
+        (11, ["净额最低排名", "用户ID", "净额Tokens", "加/减余额", "净额美元"]),
     ]
     for start_column, headers in table_headers:
         for column, header in enumerate(headers, start=start_column):
             ws.cell(top_header, column, header)
-        style_header(ws, top_header, start_column, start_column + 3)
+        style_header(ws, top_header, start_column, start_column + 4)
 
     top_start = top_header + 1
     for index in range(20):
         row_number = top_start + index
         if index < len(analysis["income_top"]):
             user = analysis["income_top"][index]
-            values = [index + 1, user["user_id"], user["income"], user["net"]]
+            values = [index + 1, user["user_id"], user["income"], user["net"], tokens_to_usd(user["income"])]
             for column, value in enumerate(values, start=1):
                 ws.cell(row_number, column, value)
             ws.cell(row_number, 2).number_format = USER_ID_FORMAT
             ws.cell(row_number, 3).number_format = TOKEN_FORMAT
             style_net_cell(ws.cell(row_number, 4))
+            ws.cell(row_number, 5).number_format = USD_FORMAT
         if index < len(analysis["expense_top"]):
             user = analysis["expense_top"][index]
-            values = [index + 1, user["user_id"], user["expense"], user["net"]]
+            values = [index + 1, user["user_id"], user["expense"], user["net"], tokens_to_usd(user["expense"])]
             for column, value in enumerate(values, start=6):
                 ws.cell(row_number, column, value)
             ws.cell(row_number, 7).number_format = USER_ID_FORMAT
             ws.cell(row_number, 8).number_format = TOKEN_FORMAT
             style_net_cell(ws.cell(row_number, 9))
+            ws.cell(row_number, 10).number_format = USD_FORMAT
         if index < len(analysis["net_low"]):
             user = analysis["net_low"][index]
             values = [
@@ -649,16 +655,18 @@ def write_summary_sheet(
                 user["user_id"],
                 user["net"],
                 f"{user['income']:,} / {user['expense']:,}",
+                tokens_to_usd(user["net"]),
             ]
             for column, value in enumerate(values, start=11):
                 ws.cell(row_number, column, value)
             ws.cell(row_number, 12).number_format = USER_ID_FORMAT
             style_net_cell(ws.cell(row_number, 13))
-        for column in list(range(1, 5)) + list(range(6, 10)) + list(range(11, 15)):
-            ws.cell(row_number, column).border = BOTTOM_BORDER
+            style_net_cell(ws.cell(row_number, 15), USD_FORMAT)
+        for column in range(1, 16):
+            ws.cell(row_number, column).border = CELL_BORDER
 
     max_section = top_start + 21
-    style_section(ws, max_section, "最大用户占比及剔除影响", 14)
+    style_section(ws, max_section, "最大用户占比及剔除影响", 15)
     max_header = max_section + 1
     max_headers = [
         "统计口径",
@@ -670,6 +678,11 @@ def write_summary_sheet(
         "剔除后减余额",
         "剔除后净额",
         "说明",
+        "该方向美元",
+        "方向总美元",
+        "剔除后加余额美元",
+        "剔除后减余额美元",
+        "剔除后净额美元",
     ]
     for column, header in enumerate(max_headers, start=1):
         ws.cell(max_header, column, header)
@@ -715,12 +728,17 @@ def write_summary_sheet(
             ]
         for column, value in enumerate(values, start=1):
             ws.cell(row_number, column, value)
-            ws.cell(row_number, column).border = BOTTOM_BORDER
+            ws.cell(row_number, column).border = CELL_BORDER
+        for column, tokens in zip((10, 11, 12, 13, 14), (values[2], values[3], values[5], values[6], values[7])):
+            ws.cell(row_number, column, tokens_to_usd(tokens))
+            ws.cell(row_number, column).border = CELL_BORDER
+            ws.cell(row_number, column).number_format = USD_FORMAT
         ws.cell(row_number, 2).number_format = USER_ID_FORMAT
         for column in (3, 4, 6, 7):
             ws.cell(row_number, column).number_format = TOKEN_FORMAT
         ws.cell(row_number, 5).number_format = PERCENT_FORMAT
         style_net_cell(ws.cell(row_number, 8))
+        style_net_cell(ws.cell(row_number, 14), USD_FORMAT)
 
     for column, width in {
         "A": 24,
@@ -731,12 +749,13 @@ def write_summary_sheet(
         "F": 24,
         "G": 16,
         "H": 18,
-        "I": 16,
-        "J": 3,
-        "K": 18,
+        "I": 32,
+        "J": 18,
+        "K": 20,
         "L": 16,
         "M": 18,
         "N": 24,
+        "O": 18,
     }.items():
         ws.column_dimensions[column].width = width
     ws.sheet_properties.pageSetUpPr.fitToPage = True
@@ -747,9 +766,12 @@ def write_summary_sheet(
 def write_user_sheet(ws, analysis: dict[str, Any]) -> None:
     headers = [
         "用户ID",
-        "加余额总数",
-        "减余额总数",
-        "净额（加-减）",
+        "加余额Tokens",
+        "加余额美元",
+        "减余额Tokens",
+        "减余额美元",
+        "净额Tokens（加-减）",
+        "净额美元（加-减）",
         "加余额业务数",
         "减余额业务数",
         "加余额业务明细",
@@ -761,26 +783,32 @@ def write_user_sheet(ws, analysis: dict[str, Any]) -> None:
             [
                 user["user_id"],
                 user["income"],
+                tokens_to_usd(user["income"]),
                 user["expense"],
+                tokens_to_usd(user["expense"]),
                 user["net"],
+                tokens_to_usd(user["net"]),
                 len(user["income_details"]),
                 len(user["expense_details"]),
                 detail_text(user["income_details"]),
                 detail_text(user["expense_details"]),
             ]
         )
-    format_data_sheet(ws, [14, 18, 18, 18, 15, 15, 72, 72], (2, 3, 4))
+    format_data_sheet(ws, [14, 19, 17, 19, 17, 22, 17, 15, 15, 72, 72],
+                      (2, 4, 6, 8, 9), usd_columns=(3, 5, 7), text_start_column=10)
     for row in range(2, ws.max_row + 1):
-        style_net_cell(ws.cell(row, 4))
+        style_net_cell(ws.cell(row, 6))
+        style_net_cell(ws.cell(row, 7), USD_FORMAT)
     if ws.max_row >= 2:
-        ws.conditional_formatting.add(
-            f"D2:D{ws.max_row}",
-            CellIsRule(operator="lessThan", formula=["0"], font=NEGATIVE_FONT),
-        )
-        ws.conditional_formatting.add(
-            f"D2:D{ws.max_row}",
-            CellIsRule(operator="greaterThan", formula=["0"], font=POSITIVE_FONT),
-        )
+        for letter in ("F", "G"):
+            ws.conditional_formatting.add(
+                f"{letter}2:{letter}{ws.max_row}",
+                CellIsRule(operator="lessThan", formula=["0"], font=NEGATIVE_FONT),
+            )
+            ws.conditional_formatting.add(
+                f"{letter}2:{letter}{ws.max_row}",
+                CellIsRule(operator="greaterThan", formula=["0"], font=POSITIVE_FONT),
+            )
 
 
 def write_detail_sheet(
@@ -788,10 +816,10 @@ def write_detail_sheet(
     aggregated: dict[tuple[int, int, int], int],
     status: int,
 ) -> None:
-    ws.append(["用户ID", "业务类型", "业务类型备注", "Tokens"])
+    ws.append(["用户ID", "业务类型", "业务类型备注", "Tokens", "美元"])
     rows = sorted(
         (
-            (user_id, business_type, business_name(business_type), tokens)
+            (user_id, business_type, business_name(business_type), tokens, tokens_to_usd(tokens))
             for (user_id, row_status, business_type), tokens in aggregated.items()
             if row_status == status
         ),
@@ -799,11 +827,11 @@ def write_detail_sheet(
     )
     for row in rows:
         ws.append(row)
-    format_data_sheet(ws, [14, 12, 30, 20], (4,))
+    format_data_sheet(ws, [14, 12, 30, 20, 17], (4,), usd_columns=(5,))
 
 
 def write_business_sheet(ws, analysis: dict[str, Any]) -> None:
-    ws.append(["方向", "业务类型", "业务类型备注", "涉及用户数", "Tokens总数", "方向内占比"])
+    ws.append(["方向", "业务类型", "业务类型备注", "涉及用户数", "Tokens总数", "美元", "方向内占比"])
     for row in analysis["business_rows"]:
         ws.append(
             [
@@ -812,12 +840,14 @@ def write_business_sheet(ws, analysis: dict[str, Any]) -> None:
                 row["name"],
                 row["user_count"],
                 row["tokens"],
+                tokens_to_usd(row["tokens"]),
                 row["share"],
             ]
         )
-    format_data_sheet(ws, [12, 12, 32, 16, 22, 16], (4, 5), user_id_columns=())
+    format_data_sheet(ws, [12, 12, 32, 16, 22, 17, 16], (4, 5),
+                      user_id_columns=(), usd_columns=(6,))
     for row in range(2, ws.max_row + 1):
-        ws.cell(row, 6).number_format = PERCENT_FORMAT
+        ws.cell(row, 7).number_format = PERCENT_FORMAT
 
 
 def create_workbook(
@@ -853,27 +883,45 @@ def save_workbook(workbook: Workbook, output: Path) -> None:
     temporary = output.with_name(f".{output.name}.tmp.xlsx")
     try:
         workbook.save(temporary)
-        os.replace(temporary, output)
+        temporary.replace(output)
     finally:
         if temporary.exists():
             temporary.unlink()
 
 
 def main() -> int:
-    args = parse_args()
+    command = parse_args()
     try:
+        from fetch_es import export_json, find_resume_paths, load_config, mark_report_complete, output_paths
+
+        config = load_config(command.es_config, command.analysis_config)
+        user_ids = load_user_ids(config.user_ids_file)
+        if not user_ids:
+            raise ValueError("用户 ID CSV 没有有效用户，不能执行 ES 查询")
+        excluded = set(config.exclude_business_types)
+        paths = (find_resume_paths(config, user_ids, excluded)
+                 if command.resume else output_paths())
+        args = argparse.Namespace(
+            input=paths.data,
+            output=paths.report,
+            user_ids=config.user_ids_file,
+            withdraw_start=config.withdraw_start,
+            withdraw_end=config.withdraw_end,
+            statistics_start=config.statistics_start,
+            statistics_end=config.statistics_end,
+        )
         validate_times(args)
-        if args.output.resolve() == args.input.resolve():
-            raise ValueError("--input 与 --output 不能指向同一文件")
-        excluded = parse_excluded_business_types(args.exclude_business_types)
+        if args.output.resolve() == args.input.resolve() or args.output.resolve() == args.user_ids.resolve():
+            raise ValueError("报表路径不能与 JSON 或用户 ID 文件相同")
+        export_json(config, user_ids, excluded, paths, resume=command.resume)
         records = load_records(args.input)
-        user_ids = load_user_ids(args.user_ids)
         aggregated, all_user_ids = aggregate_records(records, user_ids, excluded)
         analysis = build_analysis(aggregated, all_user_ids)
         workbook = create_workbook(
             analysis, aggregated, args, excluded, len(records)
         )
         save_workbook(workbook, args.output)
+        mark_report_complete(paths)
     except ValueError as error:
         print(f"错误：{error}", file=sys.stderr)
         return 2
@@ -888,11 +936,12 @@ def main() -> int:
         f"提现用户数={totals['user_count']:,}，"
         f"加余额={totals['income']:,}，"
         f"减余额={totals['expense']:,}，"
-        f"净额={totals['net']:,}"
+        f"净额={totals['net']:,}，"
+        f"净额美元=${tokens_to_usd(totals['net']):,.3f}"
     )
     print(
-        f"输入记录={len(records):,}，"
-        f"合并并排除后记录={len(aggregated):,}，"
+        f"输入聚合桶={len(records):,}，"
+        f"本地汇总组合={len(aggregated):,}，"
         f"排除业务类型={','.join(map(str, sorted(excluded))) or '无'}"
     )
     return 0
