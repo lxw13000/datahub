@@ -1,0 +1,6 @@
+{
+  "es_url": "https://your-es-host:9200",
+  "username": "your_username",
+  "password": "your_password",
+  "timeout_seconds": 300
+}
