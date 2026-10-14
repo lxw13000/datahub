@@ -66,6 +66,8 @@ public enum EBusinessType {
     WITHDRAW("提现扣除", "Withdrawal", 53, (byte) -1, (byte) 2),
     WITHDRAW_RETURN("提现退款", "Withdrawal", 54, (byte) 1, (byte) 2),
     PAY_ROLL_ORDER("提现订单奖励", "Withdrawal", 55, (byte) 1, (byte) 2),
+    RECHARGE_REFUND("充值退款扣除", "Top-up-refund", 56, (byte) -1, (byte) 1),
+    FREEZE_REFUND("冻结钻石解除", "Platform Adjustment", 57, (byte) 1, (byte) 2),
 
     /**
      * 活动任务 61-500
@@ -120,6 +122,8 @@ public enum EBusinessType {
     VIP_PLAN_TASK_REWARD("VIP任务奖励", "vip task", 108, (byte) 1, (byte) 1),
     HIGH_USER_REWARD("优质主播奖励", "Platform Rewards", 109, (byte) 1, (byte) 2),
     PK_RANK_TOP_REWARD("PK榜单奖励", "Platform Rewards", 110, (byte) 1, (byte) 2),
+    TASK_REWARD_COIN("身份任务", "Platform Rewards", 111, (byte) 1, (byte) 1),
+    TASK_REWARD_DIAMOND("身份任务", "Platform Rewards", 112, (byte) 1, (byte) 2),
     /**
      * 后台调整 501-550
      */
