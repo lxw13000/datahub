@@ -1,0 +1,8 @@
+{
+  "user_ids_file": "withdraw-user-ids.csv",
+  "withdraw_start": "2026-07-20 00:00:00",
+  "withdraw_end": "2026-07-31 23:59:59",
+  "statistics_start": "2026-07-01 00:00:00",
+  "statistics_end": "2026-07-31 23:59:59",
+  "exclude_business_types": []
+}
