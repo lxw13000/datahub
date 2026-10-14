@@ -150,6 +150,21 @@ sano:
         # where-sql为空时自动使用 dt = importDate
         where-sql:
       - enabled: false
+        index-alias: sano_wallet_diamond_freeze_record
+        table-name: sano_wallet_diamond_freeze_record
+        mapping-file: sano_wallet_diamond_freeze_record.json
+        reconcile: true
+        # 导入完成是否删除该表历史索引
+        delete-history-index: true
+        # 该表历史索引保留天数
+        reserve-days: 30
+        id-column: id
+        # 源表没有DATE字段，按创建时间的当天左闭右开范围读取。
+        dt-column: create_time
+        dt-column-type: DATETIME
+        # where-sql为空时自动按create_time的当天时间范围查询。
+        where-sql:
+      - enabled: false
         index-alias: sano_wallet_lucky_diamond_record_10m
         table-name: sano_wallet_lucky_diamond_record_10m
         mapping-file: sano_wallet_lucky_diamond_record_10m.json

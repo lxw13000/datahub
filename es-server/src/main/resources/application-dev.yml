@@ -44,7 +44,7 @@ logging:
 
 sano:
   # all提供查询并启用同步；query同样提供查询，但关闭所有同步任务和流水线。
-  server-mode: query
+  server-mode: all
   log:
     # 开发环境保留周期短，便于本地排查时快速滚动。
     max-file-size: 50MB
@@ -85,7 +85,7 @@ sano:
 
     t-plus-one:
       # T+1同步总开关；关闭后定时任务、手工导入和后台流水线均不执行。
-      enabled: false
+      enabled: true
       # 每天02:30导入昨天的数据。
       cron: "0 24 17 * * ?"
       # 每轮调度最大运行分钟数；到期后不再启动下一条待执行任务。
@@ -152,6 +152,21 @@ sano:
         # dt字段类型；DATE按dt = importDate查询。
         dt-column-type: DATE
         # where-sql为空时自动使用 dt = importDate
+        where-sql:
+      - enabled: true
+        index-alias: sano_wallet_diamond_freeze_record
+        table-name: sano_wallet_diamond_freeze_record
+        mapping-file: sano_wallet_diamond_freeze_record.json
+        reconcile: true
+        # 导入完成是否删除该表历史索引
+        delete-history-index: true
+        # 该表历史索引保留天数
+        reserve-days: 30
+        id-column: id
+        # 源表没有DATE字段，按创建时间的当天左闭右开范围读取。
+        dt-column: create_time
+        dt-column-type: DATETIME
+        # where-sql为空时自动按create_time的当天时间范围查询。
         where-sql:
       - enabled: true
         index-alias: sano_wallet_lucky_diamond_record_10m

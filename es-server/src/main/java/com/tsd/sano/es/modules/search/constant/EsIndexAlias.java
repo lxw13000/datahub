@@ -18,6 +18,11 @@ public interface EsIndexAlias {
      */
     String SANO_WALLET_DIAMOND_RECORD = "sano_wallet_diamond_record";
 
+    /**
+     * 钻石冻结记录明细
+     */
+    String SANO_WALLET_DIAMOND_FREEZE_RECORD = "sano_wallet_diamond_freeze_record";
+
 
     /**
      * 钻石记录10分钟记录明细
