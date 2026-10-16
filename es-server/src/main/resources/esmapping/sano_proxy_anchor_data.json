@@ -1,0 +1,45 @@
+{
+  "settings": {
+    "index": {
+      "number_of_shards": "1",
+      "number_of_replicas": "0",
+      "max_result_window": 20000
+    }
+  },
+  "mappings": {
+    "dynamic": "strict",
+    "properties": {
+      "proxy_id": {
+        "type": "integer"
+      },
+      "live_day": {
+        "type": "integer"
+      },
+      "anchor_user_id": {
+        "type": "integer"
+      },
+      "live_minute": {
+        "type": "integer"
+      },
+      "anchor_income": {
+        "type": "long"
+      },
+      "anchor_lucky_income": {
+        "type": "long"
+      },
+      "proxy_income": {
+        "type": "long"
+      },
+      "parent_proxy_income": {
+        "type": "long"
+      },
+      "yesterday_settled": {
+        "type": "integer"
+      },
+      "create_time": {
+        "type": "date",
+        "format": "yyyy-MM-dd'T'HH:mm:ss || yyyy-MM-dd HH:mm:ss || yyyy-MM-dd || yyyy-MM || yyyy || epoch_millis"
+      }
+    }
+  }
+}
