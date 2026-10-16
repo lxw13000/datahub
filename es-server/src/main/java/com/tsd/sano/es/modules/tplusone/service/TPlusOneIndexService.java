@@ -2,7 +2,9 @@ package com.tsd.sano.es.modules.tplusone.service;
 
 import com.tsd.sano.es.core.exception.ServiceException;
 import com.tsd.sano.es.modules.config.EsImportProperties;
+import com.tsd.sano.es.modules.config.IndexMode;
 import com.tsd.sano.es.modules.index.EsIndexManager;
+import com.tsd.sano.es.modules.index.EsIndexNameResolver;
 import com.tsd.sano.es.modules.tplusone.model.TPlusOneImportConfig;
 import com.tsd.sano.es.modules.tplusone.model.ImportContext;
 import org.apache.commons.lang3.StringUtils;
@@ -11,7 +13,6 @@ import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
 
 import java.time.LocalDate;
-import java.time.format.DateTimeFormatter;
 
 /**
  * T+1物理索引完整生命周期服务。
@@ -23,9 +24,6 @@ import java.time.format.DateTimeFormatter;
 public class TPlusOneIndexService {
 
     private static final Logger log = LoggerFactory.getLogger(TPlusOneIndexService.class);
-
-    /** 每日物理索引名称中的日期格式。 */
-    private static final DateTimeFormatter INDEX_DATE_FORMATTER = DateTimeFormatter.BASIC_ISO_DATE;
 
     /** 导入完成后恢复的默认刷新间隔。 */
     private static final String DEFAULT_REFRESH_INTERVAL = "1s";
@@ -53,14 +51,37 @@ public class TPlusOneIndexService {
     /**
      * 创建本次T+1任务使用的物理索引。
      *
-     * <p>创建阶段不绑定业务Alias，避免未完成导入的数据提前进入查询范围。</p>
+     * <p>DAY成功后才绑定Alias；其他模式创建时直接绑定，允许部分写入在刷新后可查询。</p>
      */
     public void createIndex(ImportContext context) {
         TPlusOneImportConfig config = requireConfig(context);
         String indexName = requireText(config.getIndexName(), "indexName");
         String mappingFile = requireText(config.getMappingFile(), "mappingFile");
-        indexManager.createIndex(indexName, mappingFile);
+        if (config.getIndexMode() == IndexMode.DAY) {
+            indexManager.createIndex(indexName, mappingFile);
+        } else {
+            indexManager.createIndex(indexName, mappingFile, requireText(config.getIndexAlias(), "indexAlias"));
+        }
         log.info("===> ES-TPlusOne create index success. index={}, mappingFile={}", indexName, mappingFile);
+    }
+
+    /**
+     * 为新一轮SINGLE人工全量删除重建固定索引；只能在任务仍为PENDING且已登记活动任务时调用。
+     *
+     * <p>续跑不得调用本方法。准备完成并持久化RUNNING之前，编排器不会启动Reader/Bulk。</p>
+     */
+    public void rebuildSingleIndex(TPlusOneImportConfig config) {
+        if (config.getIndexMode() != IndexMode.SINGLE || !config.isBootstrap()) {
+            throw new ServiceException("Only SINGLE bootstrap can rebuild fixed index");
+        }
+        String indexName = requireText(config.getFixedIndexName(), "fixedIndexName");
+        if (indexManager.exists(indexName)) {
+            indexManager.deleteIndex(indexName);
+        }
+        indexManager.createIndex(indexName, requireText(config.getMappingFile(), "mappingFile"),
+                requireText(config.getIndexAlias(), "indexAlias"));
+        log.info("===> ES-TPlusOne bootstrap index rebuilt. table={}, index={}, alias={}",
+                config.getTableName(), indexName, config.getIndexAlias());
     }
 
     /**
@@ -113,25 +134,30 @@ public class TPlusOneIndexService {
      */
     public void deleteHistoryIndex(ImportContext context) {
         TPlusOneImportConfig config = requireConfig(context);
-        if (!config.isDeleteHistoryIndex()) {
+        Integer reserveDays = config.getReserveDays();
+        // 三个条件必须同时满足；月、年、固定索引以及未配置保留期的日索引均永久保留。
+        if (config.getIndexMode() != IndexMode.DAY || !config.isDeleteHistoryIndex()
+                || reserveDays == null || reserveDays <= 0) {
             return;
         }
 
         String alias = requireText(config.getIndexAlias(), "indexAlias");
         String currentIndex = requireText(config.getIndexName(), "indexName");
-        int reserveDays = Math.max(1, config.getReserveDays());
         LocalDate importDate = config.getImportDate();
         if (importDate == null) {
             throw new ServiceException("ES import importDate cannot be null");
         }
 
-        String expiredIndex = alias + "_"
-                + INDEX_DATE_FORMATTER.format(importDate.minusDays(reserveDays));
-        if (StringUtils.equals(expiredIndex, currentIndex) || !indexManager.exists(expiredIndex)) {
+        String expiredIndex = EsIndexNameResolver.resolve(IndexMode.DAY, alias, null,
+                importDate.minusDays(reserveDays));
+        if (StringUtils.equals(expiredIndex, currentIndex)) {
             return;
         }
         try {
-            indexManager.deleteIndex(expiredIndex);
+            // 存在性检查和删除同属最佳努力，任何一步异常都不能反向修改同步结果。
+            if (indexManager.exists(expiredIndex)) {
+                indexManager.deleteIndex(expiredIndex);
+            }
         } catch (RuntimeException error) {
             log.warn("===> ES-TPlusOne delete history index failed. index={}, error={}",
                     expiredIndex, error.getMessage(), error);

@@ -3,12 +3,15 @@ package com.tsd.sano.es.modules.reconcile.service;
 import co.elastic.clients.elasticsearch.ElasticsearchClient;
 import co.elastic.clients.elasticsearch._types.FieldValue;
 import co.elastic.clients.elasticsearch._types.SortOrder;
+import co.elastic.clients.elasticsearch._types.query_dsl.Query;
 import co.elastic.clients.elasticsearch.core.SearchRequest;
 import co.elastic.clients.elasticsearch.core.SearchResponse;
 import co.elastic.clients.elasticsearch.core.search.Hit;
 import com.tsd.sano.es.core.exception.ServiceException;
 import com.tsd.sano.es.modules.config.SyncTableConfig;
+import com.tsd.sano.es.modules.config.IndexMode;
 import com.tsd.sano.es.modules.index.EsIndexManager;
+import com.tsd.sano.es.modules.index.EsIndexNameResolver;
 import com.tsd.sano.es.modules.notify.model.NotifyMessage;
 import com.tsd.sano.es.modules.notify.service.NotifyService;
 import com.tsd.sano.es.modules.reconcile.model.ReconcileResult;
@@ -22,26 +25,20 @@ import org.springframework.stereotype.Service;
 import java.io.IOException;
 import java.sql.Timestamp;
 import java.time.LocalDate;
-import java.time.format.DateTimeFormatter;
 import java.util.ArrayList;
 import java.util.List;
 
 /**
- * 独立的单表单日统计对账服务。
+ * 独立统计对账服务：日期分桶按业务日期对账，SINGLE按全表现状对账。
  *
  * <p>通过独立Spring执行器异步读取MySQL和ES的总量、最小ID及最大ID并比较；
- * ES统计前主动刷新已关闭日期的物理索引，避免尚未刷新文档造成假差异。
+ * MySQL非空时先主动刷新目标物理索引，避免尚未刷新文档造成假差异。
  * 该服务不维护导入任务状态，也不执行重试。</p>
  */
 @Service
 public class ReconcileStatisticsService {
 
     private static final Logger log = LoggerFactory.getLogger(ReconcileStatisticsService.class);
-
-    /**
-     * 每日物理索引名称中的日期格式。
-     */
-    private static final DateTimeFormatter INDEX_DATE_FORMATTER = DateTimeFormatter.BASIC_ISO_DATE;
 
     /**
      * 对账消息标题前缀。
@@ -87,7 +84,7 @@ public class ReconcileStatisticsService {
      * 按单表配置异步执行一次统计对账，并对匹配、不匹配和执行失败统一发送通知。
      *
      * @param tableConfig   目标表配置
-     * @param reconcileDate 对账业务日期
+     * @param reconcileDate 日期分桶的业务日期；SINGLE忽略此值并按全表现状统计
      */
     @Async("esReconcileExecutor")
     public void reconcile(SyncTableConfig tableConfig, LocalDate reconcileDate) {
@@ -98,26 +95,43 @@ public class ReconcileStatisticsService {
         }
 
         String tableName = tableConfig.getTableName();
-        String indexName = tableConfig.getIndexAlias() + "_" + INDEX_DATE_FORMATTER.format(reconcileDate);
+        IndexMode mode = tableConfig.getIndexMode();
+        LocalDate statisticsDate = mode == IndexMode.SINGLE ? null : reconcileDate;
+        String indexName = EsIndexNameResolver.resolve(mode, tableConfig.getIndexAlias(),
+                tableConfig.getFixedIndexName(), statisticsDate);
         ReconcileResult.Statistics mysqlStatistics = null;
         ReconcileResult.Statistics esStatistics = null;
 
         try {
             List<Object> parameters = new ArrayList<>();
             String businessCondition;
-            if (StringUtils.isNotBlank(tableConfig.getWhereSql())) {
-                // whereSql来自受信任部署配置，并被视为该表完整的业务过滤条件。
-                businessCondition = "(" + tableConfig.getWhereSql().trim() + ")";
-            } else if ("DATE".equals(tableConfig.getDtColumnType())) {
-                businessCondition = tableConfig.getDtColumn() + " = ?";
-                parameters.add(java.sql.Date.valueOf(reconcileDate));
-            } else if ("DATETIME".equals(tableConfig.getDtColumnType())) {
-                businessCondition = tableConfig.getDtColumn() + " >= ? AND " + tableConfig.getDtColumn() + " < ?";
-                parameters.add(Timestamp.valueOf(reconcileDate.atStartOfDay()));
-                parameters.add(Timestamp.valueOf(reconcileDate.plusDays(1).atStartOfDay()));
+            // DAY和SINGLE统计整个物理索引；共享月、年索引的三项ES统计必须复用同一日期过滤。
+            Query esCondition = Query.of(query -> query.matchAll(all -> all));
+            if (mode == IndexMode.SINGLE) {
+                businessCondition = "1 = 1";
             } else {
-                throw new ServiceException("ES reconcile dtColumnType must be DATE or DATETIME, tableName="
-                        + tableName + ", value=" + tableConfig.getDtColumnType());
+                businessCondition = switch (tableConfig.getDtColumnType()) {
+                    case DATE -> {
+                        parameters.add(java.sql.Date.valueOf(statisticsDate));
+                        if (mode == IndexMode.MONTH || mode == IndexMode.YEAR) {
+                            esCondition = Query.of(query -> query.term(term -> term.field(tableConfig.getDtColumn())
+                                    .value(statisticsDate.toString())));
+                        }
+                        yield tableConfig.getDtColumn() + " = ?";
+                    }
+                    case DATETIME -> {
+                        parameters.add(Timestamp.valueOf(statisticsDate.atStartOfDay()));
+                        parameters.add(Timestamp.valueOf(statisticsDate.plusDays(1).atStartOfDay()));
+                        if (mode == IndexMode.MONTH || mode == IndexMode.YEAR) {
+                            esCondition = Query.of(query -> query.range(range -> range.date(date -> date
+                                    .field(tableConfig.getDtColumn())
+                                    .gte(statisticsDate.atStartOfDay().toString())
+                                    .lt(statisticsDate.plusDays(1).atStartOfDay().toString())
+                                    .format("strict_date_optional_time"))));
+                        }
+                        yield tableConfig.getDtColumn() + " >= ? AND " + tableConfig.getDtColumn() + " < ?";
+                    }
+                };
             }
 
             String mysqlSql = "SELECT COUNT(1) AS total_count, MIN(" + tableConfig.getIdColumn()
@@ -136,24 +150,25 @@ public class ReconcileStatisticsService {
                     parameters.toArray()
             );
             log.info("===> ES-Reconcile mysql statistics completed. table={}, date={}, statistics={}, costMs={}",
-                    tableName, reconcileDate, mysqlStatistics,
+                    tableName, statisticsDate, mysqlStatistics,
                     System.currentTimeMillis() - mysqlStartedAt);
             if (mysqlStatistics.count() == 0L) {
-                // MySQL是对账源数据；当日没有源数据时直接通知，不刷新或查询ES。
+                // 源端为空按既有约定通知MYSQL_EMPTY，不查询ES；这不等同于确认两端匹配。
                 ReconcileResult result = ReconcileResult.mysqlEmpty(
-                        tableName, indexName, reconcileDate, mysqlStatistics);
+                        tableName, indexName, statisticsDate, mysqlStatistics);
                 log.info("===> ES-Reconcile elasticsearch statistics skipped because mysql is empty. "
                                 + "table={}, index={}, date={}",
-                        tableName, indexName, reconcileDate);
+                        tableName, indexName, statisticsDate);
                 notifyResult(result);
                 return;
             }
 
-            // 对账前主动刷新日索引，确保统计包含任务结束前最后写入的批次。
+            // 主动刷新目标索引；月年统计仍只看D日，SINGLE则看全表现状。
             indexManager.refresh(indexName);
             long esStartedAt = System.currentTimeMillis();
             SearchRequest minimumRequest = new SearchRequest.Builder()
                     .index(indexName)
+                    .query(esCondition)
                     .size(1)
                     .trackTotalHits(totalHits -> totalHits.enabled(true))
                     .source(source -> source.fetch(false))
@@ -171,6 +186,7 @@ public class ReconcileStatisticsService {
                 Long minId = extractSortId(minimumResponse.hits().hits(), tableName, "minimum");
                 SearchRequest maximumRequest = new SearchRequest.Builder()
                         .index(indexName)
+                        .query(esCondition)
                         .size(1)
                         .source(source -> source.fetch(false))
                         .sort(sort -> sort.field(field -> field
@@ -183,19 +199,19 @@ public class ReconcileStatisticsService {
             }
             log.info("===> ES-Reconcile elasticsearch statistics completed. index={}, date={}, "
                             + "statistics={}, costMs={}",
-                    indexName, reconcileDate, esStatistics,
+                    indexName, statisticsDate, esStatistics,
                     System.currentTimeMillis() - esStartedAt);
 
             ReconcileResult result = ReconcileResult.completed(
-                    tableName, indexName, reconcileDate, mysqlStatistics, esStatistics);
+                    tableName, indexName, statisticsDate, mysqlStatistics, esStatistics);
             notifyResult(result);
         } catch (RuntimeException | IOException error) {
             String message = StringUtils.defaultIfBlank(
                     error.getMessage(), error.getClass().getSimpleName());
             ReconcileResult result = ReconcileResult.failed(
-                    tableName, indexName, reconcileDate, mysqlStatistics, esStatistics, message);
+                    tableName, indexName, statisticsDate, mysqlStatistics, esStatistics, message);
             log.error("===> ES-Reconcile execution failed. table={}, index={}, date={}, error={}",
-                    tableName, indexName, reconcileDate, message, error);
+                    tableName, indexName, statisticsDate, message, error);
             notifyResult(result);
         }
     }
@@ -212,7 +228,8 @@ public class ReconcileStatisticsService {
                     .append(title).append('\n')
                     .append("表名：").append(result.tableName()).append('\n')
                     .append("索引：").append(result.indexName()).append('\n')
-                    .append("业务日期：").append(result.reconcileDate()).append('\n')
+                    .append("统计范围：").append(result.reconcileDate() == null
+                            ? "全表现状（SINGLE）" : result.reconcileDate()).append('\n')
                     .append("结果：").append(result.status()).append('\n')
                     .append("MySQL：").append(formatStatistics(result.mysql())).append('\n')
                     .append("Elasticsearch：").append(formatStatistics(result.elasticsearch()));

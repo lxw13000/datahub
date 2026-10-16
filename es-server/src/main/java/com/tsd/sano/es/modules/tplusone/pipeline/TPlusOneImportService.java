@@ -2,6 +2,8 @@ package com.tsd.sano.es.modules.tplusone.pipeline;
 
 import com.tsd.sano.es.core.exception.ServiceException;
 import com.tsd.sano.es.modules.config.EsImportProperties;
+import com.tsd.sano.es.modules.config.IndexMode;
+import com.tsd.sano.es.modules.index.EsIndexNameResolver;
 import com.tsd.sano.es.modules.tplusone.service.TPlusOneIndexService;
 import com.tsd.sano.es.modules.tplusone.model.TPlusOneImportConfig;
 import com.tsd.sano.es.modules.tplusone.model.ImportContext;
@@ -14,7 +16,6 @@ import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
 
 import java.time.LocalDate;
-import java.time.format.DateTimeFormatter;
 import java.util.Set;
 import java.util.concurrent.*;
 
@@ -30,14 +31,9 @@ public class TPlusOneImportService {
     private static final Logger log = LoggerFactory.getLogger(TPlusOneImportService.class);
 
     /**
-     * 真实索引日期后缀格式，生成 alias_yyyyMMdd。
-     */
-    private static final DateTimeFormatter INDEX_DATE_FORMATTER = DateTimeFormatter.BASIC_ISO_DATE;
-
-    /**
      * 运行中的导入任务Key集合。
      *
-     * <p>用于防止同一alias/date重复触发，避免并发创建同一个真实索引。</p>
+     * <p>按物理索引互斥，避免不同日期任务同时修改同一个月、年或固定索引设置。</p>
      */
     private static final Set<String> RUNNING_IMPORT_KEYS = ConcurrentHashMap.newKeySet();
 
@@ -88,7 +84,7 @@ public class TPlusOneImportService {
         // 先补全默认配置，确保后续组件拿到完整的表名、索引名和日期。
         normalizeConfig(config);
 
-        // 以真实索引名作为运行锁，防止同一alias/date被重复触发。
+        // 以真实索引名互斥，共享索引的不同日期任务也不能并发进入导入流程。
         String importKey = requireText(config.getIndexName(), "indexName");
         if (!RUNNING_IMPORT_KEYS.add(importKey)) {
             // add返回false表示已有相同导入正在执行，直接拒绝本次重复请求。
@@ -118,12 +114,18 @@ public class TPlusOneImportService {
                 boolean optimized = false;
 
                 try {
-                    log.info("===> ES-TPlusOne start. alias={}, index={}, table={}, date={}, startId={}",
+                    log.info("===> ES-TPlusOne start. alias={}, index={}, table={}, date={}, startId={}, indexMode={}, bootstrap={}",
                             config.getIndexAlias(),
                             config.getIndexName(),
                             config.getTableName(),
                             config.getImportDate(),
-                            config.getStartId());
+                            config.getStartId(), config.getIndexMode(), config.isBootstrap());
+
+                    // SINGLE只允许使用人工Bootstrap已准备的固定索引；每日增量无权自动补建。
+                    if (config.getIndexMode() == IndexMode.SINGLE && !indexService.exists(config.getIndexName())) {
+                        throw new ServiceException("ES SINGLE index does not exist; submit manual bootstrap, index="
+                                + config.getIndexName());
+                    }
 
                     // 先统计总量，避免无数据时创建空索引并挂alias。
                     long total = jdbcReader.count(context);
@@ -135,7 +137,7 @@ public class TPlusOneImportService {
                         return statistics;
                     }
                     if (total <= 0L) {
-                        // 指定日期无数据属于正常业务结果，不创建空索引、不切换alias，任务状态按SUCCESS处理。
+                        // 日期任务无数据不创建空索引；Bootstrap索引已由编排器准备，空全量也按SUCCESS处理。
                         log.warn("===> ES-TPlusOne no data, skip import. alias={}, table={}, date={}",
                                 config.getIndexAlias(), config.getTableName(), config.getImportDate());
                         // 即使当天无数据，也按表级保留策略尝试清理一个刚过期的历史索引。
@@ -151,7 +153,7 @@ public class TPlusOneImportService {
                             throw new ServiceException("ES import checkpoint index not exists, index="
                                     + config.getIndexName() + ", startId=" + config.getStartId());
                         }
-                        // 新索引不提前绑定Alias，避免半成品数据进入查询范围。
+                        // DAY暂不绑定Alias；月、年索引创建时绑定，后续日期直接复用。
                         indexService.createIndex(context);
                         log.info("===> ES-TPlusOne index created. index={}", config.getIndexName());
                     }
@@ -180,7 +182,7 @@ public class TPlusOneImportService {
                     }
 
                     if (statistics.isTimeoutPartial()) {
-                        // 超时暂停只恢复索引参数并刷新，不切换alias，避免线上读到半成品索引。
+                        // 暂停只恢复设置并刷新；DAY不新增Alias，其他模式保留创建时绑定的Alias。
                         indexService.afterImport(context);
                         log.warn("===> ES-TPlusOne timeout partial. alias={}, index={}, total={}, read={}, success={}, failed={}, lastReadId={}, safeCheckpointId={}, blockedSequence={}, costMs={}",
                                 config.getIndexAlias(),
@@ -207,9 +209,11 @@ public class TPlusOneImportService {
                         checkImportResult(statistics);
                     }
 
-                    // 成功写入后恢复索引参数并刷新，随后再绑定业务alias。
+                    // 仅DAY需要成功后绑定Alias；共享索引已在创建时绑定，不重复提交绑定请求。
                     indexService.afterImport(context);
-                    indexService.bindAlias(context);
+                    if (config.getIndexMode() == IndexMode.DAY) {
+                        indexService.bindAlias(context);
+                    }
                     indexService.deleteHistoryIndex(context);
 
                     log.info("===> ES-TPlusOne success. alias={}, index={}, total={}, success={}, costMs={}",
@@ -271,29 +275,33 @@ public class TPlusOneImportService {
             throw new ServiceException("ES import config cannot be null");
         }
 
-        String alias = requireText(config.getIndexAlias(), "indexAlias");
-        if (StringUtils.isBlank(config.getTableName())) {
-            // 未显式配置表名时，默认使用业务alias作为表名。
-            config.setTableName(alias);
-        }
+        String tableName = requireText(config.getTableName(), "tableName");
+        config.setTableName(tableName);
+        String alias = StringUtils.defaultIfBlank(config.getIndexAlias(), tableName).trim();
+        config.setIndexAlias(alias);
         requireText(config.getMappingFile(), "mappingFile");
 
-        if (config.getImportDate() == null) {
+        if (config.isBootstrap()) {
+            // 空日期只属于已校验的SINGLE人工全量，绝不能被补成昨天而退化为增量读取。
+            if (config.getIndexMode() != IndexMode.SINGLE || config.getImportDate() != null) {
+                throw new ServiceException("ES bootstrap requires SINGLE mode and null importDate");
+            }
+        } else if (config.getImportDate() == null) {
             // 默认按T+1导入昨天的数据。
             config.setImportDate(LocalDate.now().minusDays(1));
         }
 
         if (StringUtils.isBlank(config.getIndexName())) {
-            // 真实索引按日期分区，业务alias可同时指向保留期内多个日期索引。
-            config.setIndexName(alias + "_" + INDEX_DATE_FORMATTER.format(config.getImportDate()));
+            config.setIndexName(EsIndexNameResolver.resolve(config.getIndexMode(), alias,
+                    config.getFixedIndexName(), config.getImportDate()));
         }
     }
 
     /**
      * 校验导入结果。
      *
-     * <p>部分失败通常是单条脏数据或少量ES item错误，只记录告警并继续挂alias；
-     * 全部失败说明索引不可用，必须中断，避免查询侧读到空索引。</p>
+     * <p>少量失败在阈值内告警，超阈值或全部失败则任务失败；DAY不会新增Alias，
+     * 其他模式保留已经可见的部分写入，由通知和人工补数处理。</p>
      */
     private void checkImportResult(ImportStatistics statistics) {
         long total = statistics.getTotal().get();
@@ -302,13 +310,13 @@ public class TPlusOneImportService {
         double failureRate = total <= 0L ? 0D : (double) failed / total;
 
         if (total > 0L && success <= 0L) {
-            // 全部失败说明索引不可用，绝不能绑定alias。
+            // 全部失败必须报告失败；DAY不能发布，其他模式也不能把本次任务误报为成功。
             throw new ServiceException("ES import all documents failed, total=" + total + ", failed=" + failed);
         }
 
         if (failed > properties.getTPlusOne().getMaxFailedDocuments()
                 || failureRate > properties.getTPlusOne().getMaxFailureRate()) {
-            // 失败超过阈值时中断上线，避免业务查询读到明显不完整的数据。
+            // 失败超过阈值则停止成功收尾；共享索引原有Alias及部分写入不会回滚。
             throw new ServiceException("ES import failed documents exceed threshold, total=" + total
                     + ", success=" + success
                     + ", failed=" + failed

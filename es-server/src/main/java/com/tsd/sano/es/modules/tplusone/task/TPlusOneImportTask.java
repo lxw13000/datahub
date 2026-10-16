@@ -3,7 +3,9 @@ package com.tsd.sano.es.modules.tplusone.task;
 import com.tsd.sano.es.core.exception.ServiceException;
 import com.tsd.sano.es.modules.config.EsImportProperties;
 import com.tsd.sano.es.modules.config.EsServiceModeManager;
+import com.tsd.sano.es.modules.config.IndexMode;
 import com.tsd.sano.es.modules.config.SyncTableConfig;
+import com.tsd.sano.es.modules.index.EsIndexNameResolver;
 import com.tsd.sano.es.modules.coordination.service.SyncDrainCoordinator;
 import com.tsd.sano.es.modules.reconcile.service.ReconcileStatisticsService;
 import com.tsd.sano.es.modules.tplusone.model.ImportStatistics;
@@ -13,6 +15,7 @@ import com.tsd.sano.es.modules.tplusone.model.TPlusOneImportConfig;
 import com.tsd.sano.es.modules.tplusone.pipeline.TPlusOneImportService;
 import com.tsd.sano.es.modules.tplusone.service.SanoImportTaskService;
 import com.tsd.sano.es.modules.tplusone.service.TPlusOneNotifyService;
+import com.tsd.sano.es.modules.tplusone.service.TPlusOneIndexService;
 import org.apache.commons.lang3.StringUtils;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -24,6 +27,7 @@ import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.time.format.DateTimeFormatter;
 import java.util.List;
+import java.util.ArrayList;
 import java.util.concurrent.Executor;
 
 /**
@@ -81,6 +85,9 @@ public class TPlusOneImportTask {
      */
     private final ReconcileStatisticsService reconcileStatisticsService;
 
+    /** 人工全量执行前的固定索引删除重建，复用T+1索引生命周期服务。 */
+    private final TPlusOneIndexService indexService;
+
     /**
      * 注入T+1任务编排、异步执行、通知和运行时门禁所需组件
      */
@@ -91,7 +98,8 @@ public class TPlusOneImportTask {
                               @Qualifier("esImportExecutor") Executor esImportExecutor,
                               SyncDrainCoordinator drainCoordinator,
                               EsServiceModeManager serviceModeManager,
-                              ReconcileStatisticsService reconcileStatisticsService) {
+                              ReconcileStatisticsService reconcileStatisticsService,
+                              TPlusOneIndexService indexService) {
         this.properties = properties;
         this.importService = importService;
         this.importTaskService = importTaskService;
@@ -100,6 +108,7 @@ public class TPlusOneImportTask {
         this.drainCoordinator = drainCoordinator;
         this.serviceModeManager = serviceModeManager;
         this.reconcileStatisticsService = reconcileStatisticsService;
+        this.indexService = indexService;
     }
 
     /**
@@ -199,6 +208,9 @@ public class TPlusOneImportTask {
             throw new ServiceException("Sync drain is active; new T+1 manual tasks are not accepted");
         }
         SyncTableConfig table = properties.requireTPlusOneTable(tableName);
+        if (!isDailyTaskAllowed(table)) {
+            return "该表Bootstrap尚未成功，跳过每日补数，请先完成SINGLE人工全量任务";
+        }
 
         int createdCount = 0;
         int existingCount = 0;
@@ -211,7 +223,8 @@ public class TPlusOneImportTask {
                 SanoImportTask task = new SanoImportTask();
                 task.setTableName(tableName);
                 task.setIndexAlias(table.getIndexAlias());
-                task.setIndexName(table.getIndexAlias() + "_" + importDateText);
+                task.setIndexName(EsIndexNameResolver.resolve(table.getIndexMode(), table.getIndexAlias(),
+                        table.getFixedIndexName(), importDate));
                 task.setImportDate(importDateText);
                 task.setStatus(SanoImportTaskStatus.PENDING.name());
                 task.setLastSuccessId(0L);
@@ -286,7 +299,92 @@ public class TPlusOneImportTask {
     }
 
     /**
-     * 将超过运行窗口仍处于RUNNING的任务恢复为TIMEOUT_PARTIAL
+     * 人工创建或重置指定SINGLE表的全量任务，实际删除索引只在后台串行执行时发生。
+     *
+     * <p>与每日任务共用启动门禁；允许其他表正在运行时入队，但不能重置同表活动任务。
+     * 本方法有意复用固定文档，不新增历史Bootstrap文档或任务类型字段。</p>
+     */
+    public String rebuildSingleIndex(String tableName) {
+        requireEnabled();
+        SyncTableConfig table = properties.requireTPlusOneTable(tableName);
+        if (table.getIndexMode() != IndexMode.SINGLE) {
+            throw new ServiceException("Manual full rebuild only supports SINGLE table, tableName=" + tableName);
+        }
+        String taskId = SanoImportTask.buildBootstrapTaskId(tableName, table.getFixedIndexName());
+        Boolean accepted = drainCoordinator.callIfAcceptingNewWork(() -> {
+            // 与tryBeginTPlusOneTask共用锁，只在此处保护任务读写，不在锁内删除或创建业务索引。
+            if (drainCoordinator.isTPlusOneTableActive(tableName)) {
+                throw new ServiceException("ES table task is running; cannot reset bootstrap, tableName=" + tableName);
+            }
+            SanoImportTask existing = importTaskService.getTask(taskId).orElse(null);
+            if (existing != null && !StringUtils.equalsAny(existing.getStatus(),
+                    SanoImportTaskStatus.SUCCESS.name(), SanoImportTaskStatus.FAILED.name())) {
+                throw new ServiceException("Bootstrap is already pending or awaiting resume, taskId=" + taskId);
+            }
+            SanoImportTask task = new SanoImportTask();
+            task.setTaskId(taskId);
+            task.setTableName(tableName);
+            task.setIndexAlias(table.getIndexAlias());
+            task.setIndexName(table.getFixedIndexName());
+            task.setStatus(SanoImportTaskStatus.PENDING.name());
+            task.setCreatedAt(existing == null ? LocalDateTime.now() : existing.getCreatedAt());
+            if (existing == null) {
+                return importTaskService.addTask(task);
+            }
+            // 新对象的本轮断点和计数均为0；整文档替换同时移除上轮错误及时间信息。
+            importTaskService.resetBootstrapTask(task);
+            return Boolean.TRUE;
+        }, null);
+        if (accepted == null) {
+            throw new ServiceException("Sync drain is active; bootstrap is not accepted");
+        }
+        if (!accepted) {
+            return "Bootstrap任务已存在，未重复提交taskId=" + taskId;
+        }
+        if (!drainCoordinator.tryStartTPlusOneDispatcher()) {
+            return "Bootstrap已入队，等待后续串行扫描taskId=" + taskId;
+        }
+        try {
+            esImportExecutor.execute(() -> {
+                try {
+                    long deadlineMillis = System.currentTimeMillis()
+                            + Math.max(1, properties.getTPlusOne().getMaxRunMinutes()) * 60L * 1000L;
+                    repairExpiredRunningTasks();
+                    runPendingTasks(deadlineMillis);
+                } catch (Exception error) {
+                    // 已提交任务保持可扫描，后台启动失败不在HTTP线程补做破坏性操作。
+                    log.error("===> ES-TPlusOne bootstrap dispatcher failed. taskId={}, error={}",
+                            taskId, error.getMessage(), error);
+                } finally {
+                    finishDispatcherAndResumeCancelledDrain();
+                }
+            });
+            return "Bootstrap全量删除重建任务已提交taskId=" + taskId;
+        } catch (RuntimeException error) {
+            finishDispatcherAndResumeCancelledDrain();
+            log.error("===> ES-TPlusOne bootstrap dispatcher submit failed. taskId={}, error={}",
+                    taskId, error.getMessage(), error);
+            return "Bootstrap已持久化，后台提交失败，等待下次扫描taskId=" + taskId;
+        }
+    }
+
+    /**
+     * 检查每日任务门禁；仅SINGLE需要实时读取固定Bootstrap的SUCCESS状态。
+     *
+     * <p>任务创建、扫描及执行均复用此规则；失败不自动初始化，也不改写被跳过的每日任务。</p>
+     */
+    private boolean isDailyTaskAllowed(SyncTableConfig table) {
+        if (table.getIndexMode() != IndexMode.SINGLE) {
+            return true;
+        }
+        return importTaskService.getTask(SanoImportTask.buildBootstrapTaskId(
+                        table.getTableName(), table.getFixedIndexName()))
+                .map(task -> StringUtils.equals(task.getStatus(), SanoImportTaskStatus.SUCCESS.name()))
+                .orElse(false);
+    }
+
+    /**
+     * 将超过运行窗口仍处于RUNNING的任务恢复为TIMEOUT_PARTIAL；Bootstrap也复用本恢复规则。
      */
     private void repairExpiredRunningTasks() {
         try {
@@ -324,6 +422,11 @@ public class TPlusOneImportTask {
                 return;
             }
             try {
+                if (!isDailyTaskAllowed(table)) {
+                    log.info("===> ES-TPlusOne skip daily task before bootstrap success. table={}, date={}",
+                            table.getTableName(), importDate);
+                    continue;
+                }
                 String indexAlias = table.getIndexAlias();
                 String tableName = table.getTableName();
                 String importDateText = IMPORT_DATE_FORMATTER.format(importDate);
@@ -332,7 +435,8 @@ public class TPlusOneImportTask {
                 SanoImportTask task = new SanoImportTask();
                 task.setTableName(tableName);
                 task.setIndexAlias(indexAlias);
-                task.setIndexName(indexAlias + "_" + importDateText);
+                task.setIndexName(EsIndexNameResolver.resolve(table.getIndexMode(), indexAlias,
+                        table.getFixedIndexName(), importDate));
                 task.setImportDate(importDateText);
                 task.setStatus(SanoImportTaskStatus.PENDING.name());
                 task.setLastSuccessId(0L);
@@ -362,8 +466,21 @@ public class TPlusOneImportTask {
                 log.info("===> ES-TPlusOne stop scanning pending tasks because sync drain is active.");
                 return;
             }
+            List<String> blockedDailyTables = new ArrayList<>();
+            for (SyncTableConfig table : properties.getTPlusOneTables()) {
+                try {
+                    if (!isDailyTaskAllowed(table)) {
+                        blockedDailyTables.add(table.getTableName());
+                    }
+                } catch (RuntimeException error) {
+                    // 单表Bootstrap读取失败仅阻止其每日任务，不影响其他表或其全量任务被扫描。
+                    blockedDailyTables.add(table.getTableName());
+                    log.error("===> ES-TPlusOne bootstrap gate lookup failed. table={}, error={}",
+                            table.getTableName(), error.getMessage(), error);
+                }
+            }
             List<SanoImportTask> tasks = importTaskService.listPendingTasks(
-                    properties.getTPlusOne().getTaskFetchLimit());
+                    properties.getTPlusOne().getTaskFetchLimit(), blockedDailyTables);
             if (tasks.isEmpty()) {
                 log.info("===> ES-TPlusOne no pending task.");
                 return;
@@ -391,41 +508,70 @@ public class TPlusOneImportTask {
     /**
      * 执行单条任务，并维护运行态和持久任务终态
      *
-     * @return true表示任务已进入终态，可继续扫描；false表示被drain门禁拒绝
+     * @return true表示已处理或因Bootstrap门禁跳过，可继续扫描；false表示被drain门禁拒绝
      */
     private boolean executeTask(SanoImportTask task, long deadlineMillis) {
         if (!drainCoordinator.tryBeginTPlusOneTask(task)) {
             return false;
         }
-        // 续跑任务从最后连续完成批次的安全断点后继续读取
-        boolean resumeTask = StringUtils.equals(task.getStatus(), SanoImportTaskStatus.TIMEOUT_PARTIAL.name());
         ImportStatistics statistics = null;
         SanoImportTaskStatus terminalStatus = null;
         boolean persistenceSafe = false;
         boolean terminalUpdateAttempted = false;
         String terminalError = null;
         try {
-            LocalDate importDate = LocalDate.parse(task.getImportDate(), IMPORT_DATE_FORMATTER);
+            // 注册活动任务后重新读取，避免人工重置或上轮操作后仍执行扫描时拿到的过期快照。
+            task = importTaskService.getTask(task.getTaskId())
+                    .orElseThrow(() -> new ServiceException("ES import task no longer exists"));
+            if (!StringUtils.equalsAny(task.getStatus(), SanoImportTaskStatus.PENDING.name(),
+                    SanoImportTaskStatus.TIMEOUT_PARTIAL.name())) {
+                terminalStatus = SanoImportTaskStatus.valueOf(task.getStatus());
+                persistenceSafe = true;
+                return true;
+            }
+            boolean resumeTask = StringUtils.equals(task.getStatus(), SanoImportTaskStatus.TIMEOUT_PARTIAL.name());
             SyncTableConfig table = properties.requireTPlusOneTable(task.getTableName());
+            boolean bootstrap = task.getImportDate() == null;
+            if (bootstrap && (table.getIndexMode() != IndexMode.SINGLE
+                    || !StringUtils.equals(task.getTaskId(), SanoImportTask.buildBootstrapTaskId(
+                            table.getTableName(), table.getFixedIndexName()))
+                    || !StringUtils.equals(task.getIndexName(), table.getFixedIndexName()))) {
+                throw new ServiceException("Invalid SINGLE bootstrap task identity, taskId=" + task.getTaskId());
+            }
+            if (!bootstrap && !isDailyTaskAllowed(table)) {
+                // 门禁是在注册活动任务之后复核；此后人工重建不能并发重置同表Bootstrap。
+                terminalStatus = SanoImportTaskStatus.valueOf(task.getStatus());
+                persistenceSafe = true;
+                return true;
+            }
+            LocalDate importDate = bootstrap ? null : LocalDate.parse(task.getImportDate(), IMPORT_DATE_FORMATTER);
 
             TPlusOneImportConfig config = new TPlusOneImportConfig();
             config.setIndexAlias(task.getIndexAlias());
             config.setIndexName(task.getIndexName());
             config.setTableName(task.getTableName());
             config.setImportDate(importDate);
+            config.setBootstrap(bootstrap);
             if (resumeTask) {
                 // 续跑任务从最后连续完成批次的安全断点后继续读取
                 config.setStartId(task.getLastSuccessId());
             }
 
-            // 根据源表名反查配置，复用mapping、whereSql、主键字段和历史索引保留策略
+            // 根据源表名反查配置，复用Mapping、日期字段、索引模式和历史保留策略。
             config.setMappingFile(table.getMappingFile());
-            config.setWhereSql(table.getWhereSql());
+            config.setIndexMode(table.getIndexMode());
+            config.setFixedIndexName(table.getFixedIndexName());
             config.setIdColumn(table.getIdColumn());
             config.setDtColumn(table.getDtColumn());
             config.setDtColumnType(table.getDtColumnType());
             config.setDeleteHistoryIndex(table.isDeleteHistoryIndex());
             config.setReserveDays(table.getReserveDays());
+
+            if (bootstrap && !resumeTask) {
+                // 新一轮准备完成前保持PENDING。活动任务已登记，drain不会提前宣告排空。
+                // 准备期间即使收到drain，也先完成删除重建；随后落RUNNING并由上下文保存零断点暂停。
+                indexService.rebuildSingleIndex(config);
+            }
 
             // 先将任务置为RUNNING，再启动真实导入，避免进程中断后任务状态仍停留在PENDING
             task.setStatus(SanoImportTaskStatus.RUNNING.name());
@@ -433,16 +579,20 @@ public class TPlusOneImportTask {
             task.setStartedAt(LocalDateTime.now());
             task.setFinishedAt(null);
             task.setLastError(null);
+            // 更新结果不确定时不写FAILED覆盖；SINGLE尚未开始读取，恢复时复用已准备索引。
+            terminalUpdateAttempted = bootstrap;
             importTaskService.updateTask(task);
+            terminalUpdateAttempted = false;
             drainCoordinator.onTPlusOneTaskRunning(task);
 
-            // 调用导入服务执行单表单天导入，返回累计统计结果
+            // 返回本轮执行统计；任务累计数仅在保存暂停或成功结果时合并。
             statistics = importService.importData(config, deadlineMillis);
 
             if (statistics.isTimeoutPartial()) {
                 // 到达运行上限时只保存连续批次安全断点，下一轮从该ID之后继续读取
                 task.setStatus(SanoImportTaskStatus.TIMEOUT_PARTIAL.name());
                 task.setTotalCount(statistics.getTotal().get());
+                // 累计处理数包含续跑重放，不用于证明ES唯一文档完整；安全断点仍独立按连续批次保存。
                 task.setSuccessCount(task.getSuccessCount() + statistics.getSuccess().get());
                 task.setFailedCount(task.getFailedCount() + statistics.getFailed().get());
                 task.setLastSuccessId(statistics.getLastSuccessId());
@@ -458,6 +608,7 @@ public class TPlusOneImportTask {
             // 正常完成后记录累计结果并通知，alias切换已在导入服务内部完成
             task.setStatus(SanoImportTaskStatus.SUCCESS.name());
             task.setTotalCount(statistics.getTotal().get());
+            // 沿用累计处理口径，不扣除重放量或历史失败；最终数据完整性由独立对账确认。
             task.setSuccessCount(task.getSuccessCount() + statistics.getSuccess().get());
             task.setFailedCount(task.getFailedCount() + statistics.getFailed().get());
             task.setLastSuccessId(statistics.getLastSuccessId());
@@ -493,7 +644,7 @@ public class TPlusOneImportTask {
                             task.getTaskId(), persistError.getMessage(), persistError);
                 }
             } else {
-                // SUCCESS/TIMEOUT_PARTIAL更新结果不确定时不再用FAILED覆盖，避免把实际已提交的终态反向改写
+                // 终态或Bootstrap准备后的RUNNING更新不确定时不再覆盖，避免改变已提交的恢复语义。
                 persistenceSafe = false;
                 log.error("===> ES-TPlusOne terminal task state persistence is uncertain. taskId={}, attemptedStatus={}, error={}",
                         task.getTaskId(), task.getStatus(), e.getMessage(), e);

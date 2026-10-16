@@ -4,8 +4,6 @@ import lombok.Getter;
 import lombok.Setter;
 import org.apache.commons.lang3.StringUtils;
 
-import java.util.Locale;
-
 /**
  * 单张业务表的同步配置。
  */
@@ -24,12 +22,12 @@ public class SyncTableConfig {
     private boolean reconcile = true;
 
     /**
-     * MySQL源表名，也是同步表配置和checkpoint的唯一标识。
+     * MySQL源表名，也是同步配置和任务的表标识。
      */
     private String tableName;
 
     /**
-     * ES业务Alias，只用于聚合按日期创建的物理索引；未配置时默认等于tableName。
+     * ES业务Alias，提供统一查询入口；未配置时默认等于tableName。
      */
     private String indexAlias;
 
@@ -39,9 +37,12 @@ public class SyncTableConfig {
     private String mappingFile;
 
     /**
-     * 可选SQL条件；为空时根据dtColumnType按业务日期生成查询条件。
+     * 物理索引组织方式；不配置时保持现有按日索引行为。
      */
-    private String whereSql;
+    private IndexMode indexMode = IndexMode.DAY;
+
+    /** SINGLE模式的固定物理索引名，不能与业务Alias同名。 */
+    private String fixedIndexName;
 
     /**
      * 主键字段，用于游标分页和ES文档ID。
@@ -49,24 +50,24 @@ public class SyncTableConfig {
     private String idColumn = "id";
 
     /**
-     * 分区日期字段，whereSql为空时按该字段做日期过滤。
+     * 每日同步日期字段；需要发现修改时，应配置会随修改更新的时间字段。
      */
     private String dtColumn = "dt";
 
     /**
      * 日期字段类型；DATE按等值查询，DATETIME按当天左闭右开范围查询。
      */
-    private String dtColumnType = "DATE";
+    private DateColumnType dtColumnType = DateColumnType.DATE;
 
     /**
-     * 同步完成是否删除该表超出保留期的历史索引。
+     * 是否自动删除到期日索引；仅DAY模式且保留天数大于0时生效。
      */
     private boolean deleteHistoryIndex = false;
 
     /**
-     * 该表历史索引保留天数。
+     * 日索引保留天数；未配置或小于等于0时永久保留，非DAY模式始终不自动删除。
      */
-    private int reserveDays = 30;
+    private Integer reserveDays;
 
     /**
      * 规范化并完整校验当前表的静态配置。
@@ -80,9 +81,8 @@ public class SyncTableConfig {
         String normalizedMappingFile = StringUtils.trimToEmpty(mappingFile);
         String normalizedIdColumn = StringUtils.trimToEmpty(idColumn);
         String normalizedDtColumn = StringUtils.trimToEmpty(dtColumn);
-        String normalizedDtColumnType =
-                StringUtils.trimToEmpty(dtColumnType).toUpperCase(Locale.ROOT);
-        String normalizedWhereSql = StringUtils.trimToNull(whereSql);
+        String normalizedFixedIndexName = StringUtils.trimToNull(fixedIndexName);
+        IndexMode normalizedIndexMode = indexMode == null ? IndexMode.DAY : indexMode;
 
         validateText(normalizedTableName, "table-name");
         validateText(normalizedIndexAlias, "index-alias");
@@ -90,14 +90,12 @@ public class SyncTableConfig {
         validateText(normalizedIdColumn, "id-column");
         validateText(normalizedDtColumn, "dt-column");
 
-        if (!StringUtils.equalsAny(normalizedDtColumnType, "DATE", "DATETIME")) {
-            throw new IllegalStateException(
-                    "ES sync table dt-column-type must be DATE or DATETIME, tableName="
-                            + normalizedTableName + ", value=" + normalizedDtColumnType);
-        }
-        if (deleteHistoryIndex && reserveDays <= 0) {
-            throw new IllegalStateException(
-                    "ES sync table reserve-days cannot be negative, tableName=" + normalizedTableName);
+        if (normalizedIndexMode == IndexMode.SINGLE) {
+            validateText(normalizedFixedIndexName, "fixed-index-name");
+            if (StringUtils.equals(normalizedFixedIndexName, normalizedIndexAlias)) {
+                throw new IllegalStateException("ES SINGLE fixed-index-name cannot equal index-alias, tableName="
+                        + normalizedTableName);
+            }
         }
 
         tableName = normalizedTableName;
@@ -105,8 +103,10 @@ public class SyncTableConfig {
         mappingFile = normalizedMappingFile;
         idColumn = normalizedIdColumn;
         dtColumn = normalizedDtColumn;
-        dtColumnType = normalizedDtColumnType;
-        whereSql = normalizedWhereSql;
+        // 枚举取值由Spring配置绑定校验，此处仅补全默认值，不重复转换或校验字符串。
+        dtColumnType = dtColumnType == null ? DateColumnType.DATE : dtColumnType;
+        indexMode = normalizedIndexMode;
+        fixedIndexName = normalizedFixedIndexName;
     }
 
     /**

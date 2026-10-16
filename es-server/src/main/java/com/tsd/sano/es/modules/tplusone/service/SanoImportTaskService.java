@@ -88,7 +88,7 @@ public class SanoImportTaskService {
     /**
      * 新增导入任务。
      *
-     * <p>使用ES create语义写入，同一 table_name + import_date 已存在时返回false。</p>
+     * <p>使用ES create语义写入，每日或固定Bootstrap任务ID已存在时返回false，不覆盖原任务。</p>
      *
      * @param task 导入任务
      * @return true表示新增成功，false表示任务已存在
@@ -107,7 +107,7 @@ public class SanoImportTaskService {
         task.setUpdatedAt(now);
 
         try {
-            // create模式可以天然防止同一天同一张表重复生成任务。
+            // create语义统一防止每日任务和固定Bootstrap重复生成。
             IndexRequest<SanoImportTask> request = new IndexRequest.Builder<SanoImportTask>()
                     .index(TASK_INDEX)
                     .id(task.getTaskId())
@@ -168,6 +168,29 @@ public class SanoImportTaskService {
     }
 
     /**
+     * 人工重建时整体替换既有Bootstrap记录，清除上一轮错误、时间、统计和断点。
+     *
+     * <p>仅由编排器在同表活动任务门禁内调用；普通每日任务更新仍禁止upsert。
+     * 使用整文档替换而非局部doc，避免JSON忽略null时残留上轮错误或结束时间。</p>
+     */
+    public void resetBootstrapTask(SanoImportTask task) {
+        requireTaskNotNull(task);
+        if (task.getImportDate() != null || !StringUtils.equals(task.getTaskId(),
+                SanoImportTask.buildBootstrapTaskId(task.getTableName(), task.getIndexName()))) {
+            throw new ServiceException("Invalid SINGLE bootstrap task reset");
+        }
+        task.setUpdatedAt(LocalDateTime.now());
+        try {
+            client.index(request -> request.index(TASK_INDEX).id(task.getTaskId())
+                    .refresh(Refresh.WaitFor).document(task));
+            log.info("===> ES-TPlusOne bootstrap task reset. taskId={}", task.getTaskId());
+        } catch (IOException | ElasticsearchException error) {
+            throw new ServiceException("ES bootstrap task reset failed, taskId=" + task.getTaskId()
+                    + ", error=" + error.getMessage(), error);
+        }
+    }
+
+    /**
      * 根据任务ID查询任务。
      *
      * @param taskId 任务文档ID
@@ -195,10 +218,11 @@ public class SanoImportTaskService {
     /**
      * 查询指定数量的待执行任务。
      *
-     * @param limit 查询数量
+     * @param limit              查询数量
+     * @param blockedDailyTables Bootstrap未成功的SINGLE表；只排除其每日任务，不排除固定全量任务
      * @return 待执行任务列表
      */
-    public List<SanoImportTask> listPendingTasks(int limit) {
+    public List<SanoImportTask> listPendingTasks(int limit, List<String> blockedDailyTables) {
         int size = Math.max(1, limit);
         List<FieldValue> statuses = List.of(
                 FieldValue.of(SanoImportTaskStatus.PENDING.name()),
@@ -209,11 +233,23 @@ public class SanoImportTaskService {
             SearchResponse<SanoImportTask> response = client.search(request -> request
                             .index(TASK_INDEX)
                             .size(size)
-                            .query(query -> query
-                                    .terms(terms -> terms
+                            .query(query -> query.bool(pending -> {
+                                pending.filter(filter -> filter.terms(terms -> terms
                                             .field("status")
-                                            .terms(value -> value.value(statuses))))
-                            .sort(sort -> sort.field(field -> field.field("import_date").order(SortOrder.Asc)))
+                                            .terms(value -> value.value(statuses))));
+                                if (!blockedDailyTables.isEmpty()) {
+                                    // 在ES查询中排除被门禁阻塞的每日任务，避免同一页空转并遮挡其他表。
+                                    pending.mustNot(excluded -> excluded.bool(blocked -> blocked
+                                            .filter(filter -> filter.terms(terms -> terms.field("table_name")
+                                                    .terms(values -> values.value(blockedDailyTables.stream()
+                                                            .map(FieldValue::of).toList()))))
+                                            .filter(filter -> filter.exists(exists -> exists.field("import_date")))));
+                                }
+                                return pending;
+                            }))
+                            // Bootstrap无日期，优先扫描；每日任务仍按业务日期及创建时间串行执行。
+                            .sort(sort -> sort.field(field -> field.field("import_date")
+                                    .missing(FieldValue.of("_first")).order(SortOrder.Asc)))
                             .sort(sort -> sort.field(field -> field.field("created_at").order(SortOrder.Asc))),
                     SanoImportTask.class);
 

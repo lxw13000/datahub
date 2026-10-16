@@ -3,9 +3,9 @@ package com.tsd.sano.es.modules.reconcile.model;
 import java.time.LocalDate;
 
 /**
- * 单表单日统计对账结果。
+ * 单表统计对账结果；日期分桶按日统计，SINGLE的reconcileDate为空、表示全表现状。
  *
- * <p>对账只比较总量、最小ID和最大ID，不保存任务状态，也不反向修改任何同步checkpoint。</p>
+ * <p>对账只比较总量、最小ID和最大ID，不保存任务状态，也不反向修改同步断点。</p>
  */
 public record ReconcileResult(
         String tableName,
@@ -33,7 +33,7 @@ public record ReconcileResult(
     }
 
     /**
-     * 创建MySQL当日无数据、无需继续查询ES的结果。
+     * 创建MySQL统计范围内无数据、无需继续查询ES的结果；不能视为两端已匹配。
      */
     public static ReconcileResult mysqlEmpty(
             String tableName,
@@ -71,7 +71,7 @@ public record ReconcileResult(
         /** MySQL与ES至少有一项统计结果不一致。 */
         MIS_MATCHED,
 
-        /** MySQL当日无源数据，已通知并跳过ES统计。 */
+        /** MySQL统计范围内无源数据，已通知并跳过ES统计。 */
         MYSQL_EMPTY,
 
         /** MySQL或ES统计执行失败。 */

@@ -5,7 +5,9 @@ import com.tsd.sano.es.core.result.ResultVO;
 import com.tsd.sano.es.modules.config.EsImportProperties;
 import com.tsd.sano.es.modules.config.EsServiceModeManager;
 import com.tsd.sano.es.modules.config.SyncTableConfig;
+import com.tsd.sano.es.modules.config.IndexMode;
 import com.tsd.sano.es.modules.index.EsIndexManager;
+import com.tsd.sano.es.modules.index.EsIndexNameResolver;
 import com.tsd.sano.es.modules.reconcile.service.ReconcileStatisticsService;
 import com.tsd.sano.es.modules.tplusone.service.SanoImportTaskService;
 import com.tsd.sano.es.modules.tplusone.task.TPlusOneImportTask;
@@ -13,6 +15,8 @@ import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.apache.commons.lang3.StringUtils;
 import org.springframework.web.bind.annotation.GetMapping;
+import org.springframework.web.bind.annotation.PostMapping;
+import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
 
@@ -153,7 +157,20 @@ public class EsImportController {
     }
 
     /**
-     * 人工提交指定启用表、指定日期的异步统计对账
+     * 人工提交SINGLE全量删除重建；此操作会删除固定索引及全部数据，禁止用GET触发。
+     *
+     * <p>只接受已启用表名，固定索引、Alias及Mapping从配置读取；后台复用T+1串行执行。</p>
+     */
+    @PostMapping("/rebuildSingleIndex")
+    public ResultVO<String> rebuildSingleIndex(@RequestParam String tableName) {
+        if (StringUtils.isBlank(tableName)) {
+            throw new ServiceException("重建表tableName不能为空");
+        }
+        return ResultVO.successMessage(importTask.rebuildSingleIndex(tableName.trim()));
+    }
+
+    /**
+     * 人工提交异步统计对账；日期分桶要求date，SINGLE无需日期且只统计全表现状。
      *
      * <p>接口只校验配置和物理索引，不创建持久任务；是否真正执行由单表reconcile配置决定</p>
      */
@@ -163,19 +180,22 @@ public class EsImportController {
         if (StringUtils.isBlank(tableName)) {
             throw new ServiceException("对账表tableName不能为空，例如：sano_wallet_coin_record");
         }
-        if (StringUtils.isBlank(date)) {
-            throw new ServiceException("对账日期不能为空，请使用yyyyMMdd，例如：20260701");
-        }
-
         try {
-            LocalDate reconcileDate = LocalDate.parse(date, IMPORT_DATE_FORMATTER);
             String normalizedTableName = tableName.trim();
             SyncTableConfig table = importProperties.getTPlusOneTables().stream()
                     .filter(config -> StringUtils.equals(config.getTableName(), normalizedTableName))
                     .findFirst()
                     .orElseThrow(() -> new ServiceException(
                             "ES sync table is disabled or does not exist, tableName=" + normalizedTableName));
-            String indexName = table.getIndexAlias() + "_" + IMPORT_DATE_FORMATTER.format(reconcileDate);
+            LocalDate reconcileDate = null;
+            if (table.getIndexMode() != IndexMode.SINGLE) {
+                if (StringUtils.isBlank(date)) {
+                    throw new ServiceException("日期分桶对账必须提供date，格式yyyyMMdd");
+                }
+                reconcileDate = LocalDate.parse(date, IMPORT_DATE_FORMATTER);
+            }
+            String indexName = EsIndexNameResolver.resolve(table.getIndexMode(), table.getIndexAlias(),
+                    table.getFixedIndexName(), reconcileDate);
             if (!indexManager.exists(indexName)) {
                 throw new ServiceException("Reconcile physical index does not exist, index=" + indexName);
             }

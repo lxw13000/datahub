@@ -26,6 +26,10 @@ public class TPlusOneNotifyService {
     /** T+1消息标题前缀。 */
     private static final String SUBJECT_PREFIX = "[SANO-ES]";
 
+    /** 累计计数仅作执行参考，避免被当作最终入库数量或对账结论。 */
+    private static final String STATISTICS_NOTE = "统计说明：累计为已保存的处理统计，包含续跑重放，不等于ES最终唯一文档数；"
+            + "累计失败不代表最终缺失数，数据完整性以对账为准。";
+
     /** 同步参数，用于超时通知展示任务运行上限。 */
     private final EsImportProperties properties;
 
@@ -52,14 +56,16 @@ public class TPlusOneNotifyService {
                     .append("任务ID：").append(task.getTaskId()).append('\n')
                     .append("表名：").append(task.getTableName()).append('\n')
                     .append("索引：").append(task.getIndexName()).append('\n')
-                    .append("业务日期：").append(task.getImportDate()).append('\n')
+                    .append("同步范围：").append(task.getImportDate() == null
+                            ? "SINGLE全量Bootstrap" : task.getImportDate()).append('\n')
                     .append("结果：成功").append('\n')
-                    .append("总数：").append(task.getTotalCount()).append('\n')
-                    .append("成功：").append(task.getSuccessCount()).append('\n')
-                    .append("失败：").append(task.getFailedCount()).append('\n')
-                    .append("Bulk次数：").append(bulkCount).append('\n')
+                    .append("源端总数：").append(task.getTotalCount()).append('\n')
+                    .append("累计处理成功：").append(task.getSuccessCount()).append('\n')
+                    .append("累计处理失败：").append(task.getFailedCount()).append('\n')
+                    .append("本次Bulk响应批次：").append(bulkCount).append('\n')
                     .append("安全断点ID：").append(task.getLastSuccessId()).append('\n')
-                    .append("耗时ms：").append(costMs(task))
+                    .append("耗时ms：").append(costMs(task)).append('\n')
+                    .append(STATISTICS_NOTE)
                     .toString();
             notifyService.send(new NotifyMessage("SUCCESS", taskId(task), title, content));
         } catch (Exception error) {
@@ -83,18 +89,21 @@ public class TPlusOneNotifyService {
                     .append("任务ID：").append(task.getTaskId()).append('\n')
                     .append("表名：").append(task.getTableName()).append('\n')
                     .append("索引：").append(task.getIndexName()).append('\n')
-                    .append("业务日期：").append(task.getImportDate()).append('\n')
+                    .append("同步范围：").append(task.getImportDate() == null
+                            ? "SINGLE全量Bootstrap" : task.getImportDate()).append('\n')
                     .append("结果：失败").append('\n')
-                    .append("总数：").append(task.getTotalCount()).append('\n')
+                    .append("源端总数：").append(task.getTotalCount()).append('\n')
                     .append("本次读取：").append(currentRead).append('\n')
-                    .append("本次成功：").append(currentSuccess).append('\n')
-                    .append("本次失败：").append(currentFailed).append('\n')
-                    .append("累计成功：").append(task.getSuccessCount()).append('\n')
-                    .append("累计失败：").append(task.getFailedCount()).append('\n')
+                    .append("本次处理成功：").append(currentSuccess).append('\n')
+                    .append("本次处理失败：").append(currentFailed).append('\n')
+                    .append("累计处理成功：").append(task.getSuccessCount()).append('\n')
+                    .append("累计处理失败：").append(task.getFailedCount()).append('\n')
                     .append("安全断点ID：").append(task.getLastSuccessId()).append('\n')
                     .append("执行次数：").append(task.getRunCount()).append('\n')
                     .append("耗时ms：").append(costMs(task)).append('\n')
-                    .append("错误：").append(StringUtils.left(errorMessage, 800))
+                    .append("错误：").append(StringUtils.left(errorMessage, 800)).append('\n')
+                    // 失败路径可能未合并本轮计数，因此本次与已保存累计数分开展示，不在通知中相加。
+                    .append(STATISTICS_NOTE)
                     .toString();
             notifyService.send(new NotifyMessage("FAILED", taskId(task), title, content));
         } catch (Exception error) {
@@ -112,7 +121,6 @@ public class TPlusOneNotifyService {
             long total = task.getTotalCount();
             long success = task.getSuccessCount();
             long failed = task.getFailedCount();
-            long remaining = Math.max(total - success - failed, 0L);
             long currentRead = statistics == null ? 0L : statistics.getRead().get();
             long currentSuccess = statistics == null ? 0L : statistics.getSuccess().get();
             long currentFailed = statistics == null ? 0L : statistics.getFailed().get();
@@ -121,20 +129,22 @@ public class TPlusOneNotifyService {
                     .append("任务ID：").append(task.getTaskId()).append('\n')
                     .append("表名：").append(task.getTableName()).append('\n')
                     .append("索引：").append(task.getIndexName()).append('\n')
-                    .append("业务日期：").append(task.getImportDate()).append('\n')
+                    .append("同步范围：").append(task.getImportDate() == null
+                            ? "SINGLE全量Bootstrap" : task.getImportDate()).append('\n')
                     .append("结果：达到运行时长，已暂停").append('\n')
-                    .append("总数：").append(total).append('\n')
-                    .append("累计成功：").append(success).append('\n')
-                    .append("累计失败：").append(failed).append('\n')
-                    .append("剩余：").append(remaining).append('\n')
+                    .append("源端总数：").append(total).append('\n')
+                    .append("累计处理成功：").append(success).append('\n')
+                    .append("累计处理失败：").append(failed).append('\n')
+                    // 累计处理数可能包含重放，不能用源端总数减累计数推算剩余；续跑依据安全断点。
                     .append("本次读取：").append(currentRead).append('\n')
-                    .append("本次成功：").append(currentSuccess).append('\n')
-                    .append("本次失败：").append(currentFailed).append('\n')
+                    .append("本次处理成功：").append(currentSuccess).append('\n')
+                    .append("本次处理失败：").append(currentFailed).append('\n')
                     .append("安全断点ID：").append(task.getLastSuccessId()).append('\n')
                     .append("最大运行分钟：")
                     .append(properties.getTPlusOne().getMaxRunMinutes()).append('\n')
                     .append("耗时ms：").append(costMs(task)).append('\n')
-                    .append("说明：已停止继续读取MySQL，剩余数据下次任务继续同步。")
+                    .append("说明：已停止继续读取MySQL，后续从安全断点继续同步，允许重放。 ").append('\n')
+                    .append(STATISTICS_NOTE)
                     .toString();
             notifyService.send(new NotifyMessage(
                     "TIMEOUT_PARTIAL", taskId(task), title, content));

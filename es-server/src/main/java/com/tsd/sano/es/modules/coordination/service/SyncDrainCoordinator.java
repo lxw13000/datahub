@@ -183,6 +183,13 @@ public class SyncDrainCoordinator {
     }
 
     /**
+     * 在现有启动门禁内检查同表活动任务，防止人工重置Bootstrap与每日任务开始执行发生竞态。
+     */
+    public synchronized boolean isTPlusOneTableActive(String tableName) {
+        return activeTPlusOneTask != null && activeTPlusOneTask.tableName.equals(tableName);
+    }
+
+    /**
      * 将Reader/Bulk上下文挂到当前任务；drain已先发生时立即把停止信号送达上下文
      */
     public synchronized void attachTPlusOneContext(TPlusOneImportConfig config, ImportContext context) {

@@ -49,10 +49,11 @@ public class EsSearchUtil {
 
 
     /**
-     * 根据查询时间范围设置ES查询索引。
+     * 为现有DAY模式业务查询按时间范围选择物理索引。
      *
      * <p>如果起止时间完整且格式为yyyy-MM-dd HH:mm:ss，则按天生成物理索引名，减少无关历史索引参与查询；
      * 如果时间缺失或格式异常，则回退到alias，保证查询仍可执行。</p>
+     * <p>本方法不推导MONTH/YEAR/SINGLE名称；后续这些模式的业务查询应直接使用Alias。</p>
      *
      * @param indexAlias 业务alias，也是物理索引名前缀
      * @param startTime  开始时间，格式yyyy-MM-dd HH:mm:ss

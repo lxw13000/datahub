@@ -6,7 +6,7 @@ import lombok.Setter;
 import java.util.concurrent.atomic.AtomicLong;
 
 /**
- * ES导入统计信息。
+ * 单轮T+1导入的内存统计信息，不包含以前轮次已保存的累计数量。
  *
  * <p>多个Reader/Bulk阶段共享该对象，计数字段使用AtomicLong保证并发更新安全。</p>
  *
@@ -22,22 +22,22 @@ public class ImportStatistics {
     private final AtomicLong total = new AtomicLong();
 
     /**
-     * 已读取数据量。
+     * 本轮已读取数量，续跑时可能包含上轮已写入但未纳入安全断点的数据。
      */
     private final AtomicLong read = new AtomicLong();
 
     /**
-     * 已成功写入ES的数据量。
+     * 本轮Bulk响应确认成功的文档处理数量，不是跨轮次去重后的唯一文档数。
      */
     private final AtomicLong success = new AtomicLong();
 
     /**
-     * 写入ES失败的数据量。
+     * 本轮记录的失败处理数量；请求重试的每次失败不会逐次累加。
      */
     private final AtomicLong failed = new AtomicLong();
 
     /**
-     * 当前Bulk执行次数。
+     * 本轮已处理Bulk响应的批次数，不含未取得响应的请求重试次数。
      */
     private final AtomicLong bulkCount = new AtomicLong();
 

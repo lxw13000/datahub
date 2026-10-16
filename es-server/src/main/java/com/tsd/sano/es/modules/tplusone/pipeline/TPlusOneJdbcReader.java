@@ -16,7 +16,6 @@ import java.time.LocalDate;
 import java.time.format.DateTimeFormatter;
 import java.util.ArrayList;
 import java.util.List;
-import java.util.Locale;
 import java.util.Map;
 import java.util.concurrent.TimeUnit;
 import java.util.regex.Pattern;
@@ -50,16 +49,6 @@ public class TPlusOneJdbcReader {
      * DATE类型分区字段的参数格式，对应现有dt字段的yyyy-MM-dd格式。
      */
     private static final DateTimeFormatter DATE_FORMATTER = DateTimeFormatter.ISO_LOCAL_DATE;
-
-    /**
-     * DATE类型分区字段配置值。
-     */
-    private static final String DT_COLUMN_TYPE_DATE = "DATE";
-
-    /**
-     * DATETIME类型分区字段配置值。
-     */
-    private static final String DT_COLUMN_TYPE_DATETIME = "DATETIME";
 
     /**
      * 队列入队等待时间。
@@ -299,37 +288,30 @@ public class TPlusOneJdbcReader {
     /**
      * 生成查询条件。
      *
-     * <p>whereSql有值时认为它来自可信配置，直接作为WHERE片段；
-     * whereSql为空时，DATE类型按日期等值过滤，DATETIME类型按当天左闭右开时间范围过滤。</p>
+     * <p>DATE按日期等值过滤，DATETIME按当天左闭右开时间范围过滤；
+     * 查询条件只由程序生成，不支持外部配置SQL片段。</p>
      */
     private QueryCondition buildCondition(TPlusOneImportConfig config) {
-        if (StringUtils.isNotBlank(config.getWhereSql())) {
-            // whereSql用于复杂场景，需由可信配置提供，不接收外部请求参数。
-            return new QueryCondition("(" + config.getWhereSql().trim() + ")", List.of());
+        if (config.isBootstrap()) {
+            // 仅编排器校验通过的SINGLE全量可走此分支；分页仍追加id游标，不接收自定义SQL。
+            return new QueryCondition("1 = 1", List.of());
         }
-
         String dtColumn = requireColumnName(config.getDtColumn(), "dtColumn");
         LocalDate importDate = config.getImportDate();
         if (importDate == null) {
-            throw new ServiceException("ES import importDate cannot be null when whereSql is blank");
+            throw new ServiceException("ES import importDate cannot be null for daily task");
         }
 
-        String dtColumnType = StringUtils.defaultIfBlank(config.getDtColumnType(), DT_COLUMN_TYPE_DATE)
-                .trim()
-                .toUpperCase(Locale.ROOT);
-        if (DT_COLUMN_TYPE_DATE.equals(dtColumnType)) {
-            // DATE字段按业务日期等值过滤，兼容已有dt字段和(dt, id)联合索引。
-            return new QueryCondition(dtColumn + " = ?", List.of(DATE_FORMATTER.format(importDate)));
-        }
-        if (DT_COLUMN_TYPE_DATETIME.equals(dtColumnType)) {
-            // DATETIME字段使用左闭右开区间，避免23:59:59遗漏带毫秒或微秒的记录。
-            Timestamp startTime = Timestamp.valueOf(importDate.atStartOfDay());
-            Timestamp endTime = Timestamp.valueOf(importDate.plusDays(1).atStartOfDay());
-            return new QueryCondition(dtColumn + " >= ? AND " + dtColumn + " < ?", List.of(startTime, endTime));
-        }
-
-        throw new ServiceException("ES import dtColumnType must be DATE or DATETIME, dtColumnType="
-                + config.getDtColumnType());
+        return switch (config.getDtColumnType()) {
+            // DATE按等值过滤，兼容已有dt字段及联合索引。
+            case DATE -> new QueryCondition(dtColumn + " = ?", List.of(DATE_FORMATTER.format(importDate)));
+            case DATETIME -> {
+                // 左闭右开区间避免23:59:59遗漏带毫秒或微秒的记录，也适用于TIMESTAMP。
+                Timestamp startTime = Timestamp.valueOf(importDate.atStartOfDay());
+                Timestamp endTime = Timestamp.valueOf(importDate.plusDays(1).atStartOfDay());
+                yield new QueryCondition(dtColumn + " >= ? AND " + dtColumn + " < ?", List.of(startTime, endTime));
+            }
+        };
     }
 
     /**

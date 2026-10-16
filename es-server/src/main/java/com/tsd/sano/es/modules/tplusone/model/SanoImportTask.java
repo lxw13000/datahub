@@ -20,7 +20,7 @@ import java.time.LocalDateTime;
 public class SanoImportTask {
 
     /**
-     * 任务文档ID，不写入ES文档体，规则为 table_name + "_" + import_date。
+     * 任务文档ID，不写入ES文档体；每日为tableName_yyyyMMdd，人工全量为固定Bootstrap ID。
      */
     @JsonIgnore
     private String taskId;
@@ -44,7 +44,7 @@ public class SanoImportTask {
     private String indexName;
 
     /**
-     * 导入业务日期，格式yyyyMMdd。
+     * 导入业务日期，格式yyyyMMdd；SINGLE人工全量及其续跑为空，不承载任务类型。
      */
     @JsonProperty("import_date")
     private String importDate;
@@ -64,19 +64,19 @@ public class SanoImportTask {
     private long lastSuccessId;
 
     /**
-     * 本任务源端总数。
+     * 最近一次保存的本任务同步范围内源端总数，不是累计处理次数。
      */
     @JsonProperty("total_count")
     private long totalCount;
 
     /**
-     * 已成功写入ES的数据量。
+     * 已保存的累计处理成功数量，包含暂停续跑时的重放，不代表ES最终唯一文档数。
      */
     @JsonProperty("success_count")
     private long successCount;
 
     /**
-     * 写入失败数据量。
+     * 已保存的累计处理失败数量；后续重放成功不扣减，不代表最终仍缺失的文档数。
      */
     @JsonProperty("failed_count")
     private long failedCount;
@@ -124,9 +124,16 @@ public class SanoImportTask {
     /**
      * 构建任务文档ID。
      *
-     * <p>同一张表同一天只有一条任务记录，ES写入时使用该值作为_id。</p>
+     * <p>每日任务保持原ID；空日期的固定全量任务由编排器校验表模式后提交。</p>
      */
     public String buildTaskId() {
-        return tableName + "_" + importDate;
+        return importDate == null ? buildBootstrapTaskId(tableName, indexName) : tableName + "_" + importDate;
+    }
+
+    /**
+     * 统一人工提交、增量门禁及执行校验所用的固定任务ID，重建多次也只复用这一条记录。
+     */
+    public static String buildBootstrapTaskId(String tableName, String fixedIndexName) {
+        return tableName + "_BOOTSTRAP_" + fixedIndexName;
     }
 }

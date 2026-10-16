@@ -116,10 +116,13 @@ sano:
     # T+1表目录；enabled=false时不生成和执行该表任务。
     # table-name是同步表唯一标识；index-alias为空时默认等于table-name，仅作为业务查询Alias。
     # reconcile未配置时默认true；同步流程统一异步调用，对账入口按单表配置决定是否实际执行。
-    # id-column用于MySQL游标和ES文档ID；dt-column/dt-column-type/where-sql决定日期查询条件。
-    # delete-history-index和reserve-days控制成功导入后的历史索引清理。
+    # index-mode支持DAY/MONTH/YEAR/SINGLE；未配置默认DAY，SINGLE必须配置fixed-index-name。
+    # id-column用于MySQL游标和ES文档ID；程序按dt-column/dt-column-type生成每日日期条件。
+    # 仅DAY、delete-history-index=true、reserve-days>0同时满足时自动清理；其他情况永久保留。
     tables:
       - enabled: false
+        # 现有表保持按日索引，导入成功后才绑定Alias。
+        index-mode: DAY
         index-alias: sano_wallet_coin_record
         table-name: sano_wallet_coin_record
         mapping-file: sano_wallet_coin_record.json
@@ -132,9 +135,9 @@ sano:
         dt-column: dt
         # dt字段类型；DATE按dt = importDate查询。
         dt-column-type: DATE
-        # where-sql为空时自动使用 dt = importDate
-        where-sql:
       - enabled: false
+        # 现有表保持按日索引，导入成功后才绑定Alias。
+        index-mode: DAY
         index-alias: sano_wallet_diamond_record
         table-name: sano_wallet_diamond_record
         mapping-file: sano_wallet_diamond_record.json
@@ -147,9 +150,9 @@ sano:
         dt-column: dt
         # dt字段类型；DATE按dt = importDate查询。
         dt-column-type: DATE
-        # where-sql为空时自动使用 dt = importDate
-        where-sql:
       - enabled: false
+        # 现有表保持按日索引，导入成功后才绑定Alias。
+        index-mode: DAY
         index-alias: sano_wallet_diamond_freeze_record
         table-name: sano_wallet_diamond_freeze_record
         mapping-file: sano_wallet_diamond_freeze_record.json
@@ -162,9 +165,9 @@ sano:
         # 源表没有DATE字段，按创建时间的当天左闭右开范围读取。
         dt-column: create_time
         dt-column-type: DATETIME
-        # where-sql为空时自动按create_time的当天时间范围查询。
-        where-sql:
       - enabled: false
+        # 现有表保持按日索引，导入成功后才绑定Alias。
+        index-mode: DAY
         index-alias: sano_wallet_lucky_diamond_record_10m
         table-name: sano_wallet_lucky_diamond_record_10m
         mapping-file: sano_wallet_lucky_diamond_record_10m.json
@@ -177,9 +180,9 @@ sano:
         dt-column: dt
         # dt字段类型；DATE按dt = importDate查询。
         dt-column-type: DATE
-        # where-sql为空时自动使用 dt = importDate
-        where-sql:
       - enabled: false
+        # 现有表保持按日索引，导入成功后才绑定Alias。
+        index-mode: DAY
         index-alias: sano_game_record
         table-name: sano_game_record
         mapping-file: sano_game_record.json
@@ -193,5 +196,3 @@ sano:
         dt-column: create_time
         # DATETIME/TIMESTAMP字段按当天左闭右开时间范围查询。
         dt-column-type: DATETIME
-        # where-sql为空时自动按create_time的当天时间范围查询。
-        where-sql:
