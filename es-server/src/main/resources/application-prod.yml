@@ -198,3 +198,19 @@ sano:
         dt-column: create_time
         # DATETIME/TIMESTAMP字段按当天左闭右开时间范围查询。
         dt-column-type: DATETIME
+      - enabled: true
+        # 充值订单使用固定索引永久保存；首次需人工全量初始化，成功后才执行每日增量。
+        index-mode: SINGLE
+        fixed-index-name: sano_wallet_recharge_v1
+        index-alias: sano_wallet_recharge
+        table-name: sano_wallet_recharge
+        mapping-file: sano_wallet_recharge.json
+        # SINGLE按全表现状对账；当天尚未同步的新增订单可能产生数量差异。
+        reconcile: true
+        # 固定索引不自动清理，不配置reserve-days。
+        delete-history-index: false
+        # 订单号同时用作MySQL分页游标和ES文档ID。
+        id-column: order_no
+        # 按下单时间当天左闭右开范围读取；历史订单变更由人工重跑创建日期或全量重建。
+        dt-column: create_time
+        dt-column-type: DATETIME
