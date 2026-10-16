@@ -9,6 +9,7 @@ import com.tsd.sano.es.modules.index.EsIndexNameResolver;
 import com.tsd.sano.es.modules.coordination.service.SyncDrainCoordinator;
 import com.tsd.sano.es.modules.reconcile.service.ReconcileStatisticsService;
 import com.tsd.sano.es.modules.tplusone.model.ImportStatistics;
+import com.tsd.sano.es.modules.tplusone.model.HistoryImportResult;
 import com.tsd.sano.es.modules.tplusone.model.SanoImportTask;
 import com.tsd.sano.es.modules.tplusone.model.SanoImportTaskStatus;
 import com.tsd.sano.es.modules.tplusone.model.TPlusOneImportConfig;
@@ -28,12 +29,14 @@ import java.time.LocalDateTime;
 import java.time.format.DateTimeFormatter;
 import java.util.List;
 import java.util.ArrayList;
+import java.util.UUID;
 import java.util.concurrent.Executor;
 
 /**
  * ES定时导入任务
  *
- * <p>每天先生成PENDING任务，再按任务索引顺序串行执行待处理任务</p>
+ * <p>每天先生成PENDING任务，再按任务索引顺序串行执行待处理任务。
+ * 低频人工历史初始化复用串行门禁和导入流水线，但不读写任务索引。</p>
  */
 @Component
 public class TPlusOneImportTask {
@@ -189,6 +192,130 @@ public class TPlusOneImportTask {
             log.error("===> ES-TPlusOne manual task submit failed. startDate={}, endDate={}, error={}",
                     startDate, endDate, e.getMessage(), e);
             return false;
+        }
+    }
+
+    /**
+     * 人工初始化MONTH/YEAR历史范围，不创建或更新任何任务文档。
+     *
+     * <p>只占用当前实例的串行执行门禁，内部逐日复用导入流水线。进度仅存于内存，
+     * drain、中断或失败后停止后续日期；调用方根据日志和最终通知重新提交，不自动续跑。
+     * SINGLE仍使用原全量重建入口，DAY仍使用原每日任务入口。</p>
+     *
+     * @param tableName 已启用的MySQL源表名
+     * @param startDate 开始日期，包含
+     * @param endDate 结束日期，包含；历史初始化建议截止昨天
+     * @return 后台提交说明和本次操作ID，不代表导入已经完成
+     */
+    public String importHistoryDateRange(String tableName, LocalDate startDate, LocalDate endDate) {
+        requireEnabled();
+        SyncTableConfig table = properties.requireTPlusOneTable(tableName);
+        if (table.getIndexMode() != IndexMode.MONTH && table.getIndexMode() != IndexMode.YEAR) {
+            throw new ServiceException("人工历史初始化仅支持MONTH/YEAR；DAY使用每日任务，SINGLE使用原全量重建接口");
+        }
+        if (!drainCoordinator.tryStartTPlusOneDispatcher()) {
+            // 不落库就不能假称已排队；忙碌或drain期间直接拒绝，由调用方稍后重试。
+            throw new ServiceException("同步执行器忙碌或正在drain，人工历史导入未提交，请稍后重试");
+        }
+        String operationId = "HISTORY-" + UUID.randomUUID();
+        try {
+            esImportExecutor.execute(() -> {
+                long startedAt = System.currentTimeMillis();
+                HistoryImportResult result = new HistoryImportResult();
+                result.setOperationId(operationId);
+                result.setTableName(tableName);
+                result.setStartDate(startDate);
+                result.setEndDate(endDate);
+                log.info("===> ES-TPlusOne history start. operationId={}, table={}, startDate={}, endDate={}, indexMode={}",
+                        operationId, tableName, startDate, endDate, table.getIndexMode());
+                try {
+                    for (LocalDate date = startDate; !date.isAfter(endDate); date = date.plusDays(1)) {
+                        result.setCurrentDate(date);
+                        if (Thread.currentThread().isInterrupted() || !drainCoordinator.isAcceptingManualHistoryWork()) {
+                            result.setStatus(HistoryImportResult.Status.STOPPED);
+                            result.setError("线程已中断或drain已发起，不再启动下一日期；需人工重新提交");
+                            break;
+                        }
+                        TPlusOneImportConfig config = new TPlusOneImportConfig();
+                        config.setTableName(tableName);
+                        config.setIndexAlias(table.getIndexAlias());
+                        config.setIndexName(EsIndexNameResolver.resolve(table.getIndexMode(), table.getIndexAlias(),
+                                table.getFixedIndexName(), date));
+                        config.setImportDate(date);
+                        config.setMappingFile(table.getMappingFile());
+                        config.setIndexMode(table.getIndexMode());
+                        config.setReadMode(table.getReadMode());
+                        config.setIdColumn(table.getIdColumn());
+                        config.setDocumentIdColumns(table.getDocumentIdColumns());
+                        config.setDtColumn(table.getDtColumn());
+                        config.setDtColumnType(table.getDtColumnType());
+                        config.setDeleteHistoryIndex(table.isDeleteHistoryIndex());
+                        config.setReserveDays(table.getReserveDays());
+
+                        // 仅借用任务Bean登记单日内存身份，不调用任务索引服务，也不进入持久恢复列表。
+                        SanoImportTask runtimeTask = new SanoImportTask();
+                        runtimeTask.setTaskId(operationId + "_" + IMPORT_DATE_FORMATTER.format(date));
+                        runtimeTask.setTableName(tableName);
+                        runtimeTask.setIndexAlias(config.getIndexAlias());
+                        runtimeTask.setIndexName(config.getIndexName());
+                        runtimeTask.setImportDate(IMPORT_DATE_FORMATTER.format(date));
+                        runtimeTask.setStatus(SanoImportTaskStatus.RUNNING.name());
+                        if (!drainCoordinator.tryBeginManualHistoryTask(runtimeTask)) {
+                            result.setStatus(HistoryImportResult.Status.STOPPED);
+                            result.setError("drain先于当前日期获得启动边界；需从当前日期人工重新提交");
+                            break;
+                        }
+                        boolean failed = true;
+                        try {
+                            // 人工低频初始化不套用普通调度每轮时长上限，仍服从现有drain和中断边界。
+                            // 始终从当天起点读取；不删除已有月/年索引，依靠稳定文档ID允许整日重放。
+                            ImportStatistics statistics = importService.importData(config, 0L);
+                            result.setSuccessCount(result.getSuccessCount() + statistics.getSuccess().get());
+                            result.setFailedCount(result.getFailedCount() + statistics.getFailed().get());
+                            failed = false;
+                            if (statistics.isTimeoutPartial()) {
+                                result.setStatus(HistoryImportResult.Status.STOPPED);
+                                result.setError("当前日期因停止请求未完成；未保存持久断点，需从该日期重新提交");
+                                break;
+                            }
+                            result.setLastCompletedDate(date);
+                            result.setCompletedDays(result.getCompletedDays() + 1L);
+                            log.info("===> ES-TPlusOne history date completed. operationId={}, table={}, date={}, index={}, completedDays={}",
+                                    operationId, tableName, date, config.getIndexName(), result.getCompletedDays());
+                            try {
+                                // 对账保持独立异步及单表开关，提交失败不改变已完成日期，不触发任务通知。
+                                reconcileStatisticsService.reconcile(table, date);
+                            } catch (RuntimeException reconcileError) {
+                                log.warn("===> ES-TPlusOne history reconcile submit failed. operationId={}, table={}, date={}, error={}",
+                                        operationId, tableName, date, reconcileError.getMessage());
+                            }
+                        } finally {
+                            // importData退出时Reader/Bulk及内存已清理，才允许释放单日运行态。
+                            drainCoordinator.finishManualHistoryTask(runtimeTask.getTaskId(), failed);
+                        }
+                    }
+                } catch (Exception error) {
+                    result.setStatus(Thread.currentThread().isInterrupted()
+                            ? HistoryImportResult.Status.STOPPED : HistoryImportResult.Status.FAILED);
+                    result.setError(StringUtils.left(error.getMessage(), 1000));
+                    log.error("===> ES-TPlusOne history failed. operationId={}, table={}, date={}, lastCompletedDate={}, error={}",
+                            operationId, tableName, result.getCurrentDate(), result.getLastCompletedDate(), error.getMessage(), error);
+                } finally {
+                    result.setCostMs(System.currentTimeMillis() - startedAt);
+                    log.info("===> ES-TPlusOne history finished. operationId={}, table={}, result={}, startDate={}, endDate={}, "
+                                    + "lastCompletedDate={}, currentDate={}, completedDays={}, success={}, failed={}, costMs={}",
+                            operationId, tableName, result.getStatus(), startDate, endDate, result.getLastCompletedDate(),
+                            result.getCurrentDate(), result.getCompletedDays(), result.getSuccessCount(), result.getFailedCount(), result.getCostMs());
+                    // 先释放执行器令牌，通知通道的耗时不能阻止drain完成。
+                    // 不调用持久任务恢复入口，人工历史路径本身不扫描或重投任何任务文档。
+                    drainCoordinator.onTPlusOneDispatcherStopped();
+                    notifyService.notifyHistoryResult(result);
+                }
+            });
+            return "人工历史导入已提交，不写任务文档；operationId=" + operationId;
+        } catch (Exception error) {
+            drainCoordinator.onTPlusOneDispatcherStopped();
+            throw new ServiceException("人工历史导入后台提交失败，未创建任务文档，operationId=" + operationId, error);
         }
     }
 

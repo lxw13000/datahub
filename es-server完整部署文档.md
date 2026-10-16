@@ -601,6 +601,28 @@ curl -fsS -u "elastic:${ES_PASSWORD}" \
 
 ### 18.3 每日补数和对账
 
+MONTH/YEAR首次导入较长历史时，可使用不写任务文档的人工入口，避免创建大量每日任务。先确认范围内数据未被错误模式写入，建议截止昨天并避开每日自动调度窗口：
+
+```bash
+BASE_URL='http://127.0.0.1:9003'
+TOKEN='填写测试部署脚本内置的有效Token'
+TABLE_NAME='sano_proxy_anchor_data'
+START_DATE='20260101'
+END_DATE='20261015'
+
+curl -fsS -X POST -H "token: ${TOKEN}" \
+  --data-urlencode "tableName=${TABLE_NAME}" \
+  --data-urlencode "startDate=${START_DATE}" \
+  --data-urlencode "endDate=${END_DATE}" \
+  "${BASE_URL}/import/importHistoryDateRange" | jq .
+
+docker logs -f -t --tail 200 sano-es-server-test
+```
+
+按实际历史范围修改起止日期；正式环境直连ALL实例时，BASE_URL改为`http://127.0.0.1:8002`并使用正式Token，日志容器名改为`sano-es-server`。接口返回操作ID只表示已受理，最终结果查看`ES-TPlusOne history`日志和历史导入汇总通知。后台逐日覆盖写入，不删除已有月/年索引；对账仍按单表开关逐日异步执行。
+
+该入口不读写`sano_import_task`，忙碌时直接拒绝，不套用普通调度的每轮时长上限。drain时停止启动后续日期，当前日期遵守原流水线的安全停止边界。进度仅在内存中，停止、失败、drain取消或进程重启后均不会自动续跑；从通知中的中断日期重新提交。不确定完成位置，或强制退出未收到通知时，可重复提交原范围覆盖写入。它不是数据删除重建或一致性快照接口；SINGLE仍使用18.2节原重建入口。
+
 MONTH/YEAR按日补数继续使用原接口，只覆盖该日期读取到的业务ID，不删除共享物理索引。重复提交已存在任务不重置其SUCCESS/FAILED，处理已有失败任务仍需人工确认原任务状态，不能把再次请求当成强制重跑。
 
 测试环境单表日期补数：

@@ -181,6 +181,7 @@ tables:
 | `/import/importAppointDay?date=yyyyMMdd` | 所有启用表的指定单日任务 |
 | `/import/importDateRange?startDate=...&endDate=...` | 所有启用表的日期段任务 |
 | `/import/importTableDateRange?tableName=...&startDate=...&endDate=...` | 指定表的日期段任务 |
+| `POST /import/importHistoryDateRange?tableName=...&startDate=...&endDate=...` | MONTH/YEAR低频人工历史导入；后台逐日执行，不读写任务索引 |
 | `POST /import/rebuildSingleIndex?tableName=...` | SINGLE人工全量删除重建；实际删除在后台执行 |
 
 全表日期入口在异步dispatcher中创建任务；单表日期和SINGLE重建入口先持久化任务，再尝试启动后台扫描。已有dispatcher时不并发启动第二条执行链，已入队任务由当前或后续扫描继续处理。Bootstrap未成功的SINGLE每日任务在扫描中排除，避免空转和遮挡其他表任务；其无日期Bootstrap本身仍可被优先扫描。
@@ -202,6 +203,18 @@ POST人工提交已启用SINGLE表
 已SUCCESS或FAILED可人工重置同一固定文档再执行全量删除重建；PENDING、RUNNING、TIMEOUT_PARTIAL不允许重复重置。索引准备前宕机留下PENDING可重新准备；RUNNING残留恢复为TIMEOUT_PARTIAL后只续跑，不再次删除，即使安全断点为0也一样。准备期间已登记活动任务，drain不能提前返回安全排空。
 
 源表为空也会完成空固定索引创建及Alias绑定。每日增量仅按配置dt-column/dt-column-type查询新增、修改，固定索引丢失时报该表失败，不自动补建或全量。MySQL物理删除不做自动同步，由运维人工全量重建清理ES残留；全量导入不是数据库一致性快照。
+
+### 6.4 MONTH/YEAR无持久任务的人工历史初始化
+
+`POST /import/importHistoryDateRange`接收已启用表名及`yyyyMMdd`起止日期，范围两端均包含。仅支持MONTH/YEAR；DAY继续使用每日任务，SINGLE继续使用原全量删除重建入口。
+
+该入口不读取、创建、修复或更新`sano_import_task`。后台直接逐日调用现有T+1导入流水线：按单表`read-mode`读取当天数据，按日期创建或复用月/年索引，复用Bulk、内存预算及异常处理。所有日期从当天起点开始，不删除已有共享索引。对账仍按每一天独立异步提交，由单表`reconcile`决定是否执行。
+
+人工历史导入与普通任务共用当前实例串行门禁，忙碌或drain期间直接拒绝，不宣称持久排队。该低频入口不套用普通调度的每轮运行分钟限制，建议避开每日自动调度窗口，防止长时间占用执行器导致本轮自动调度跳过。
+
+单日运行只在drain协调器登记内存身份，不出现在持久任务摘要中，也不进入cancel自动续跑列表。drain后不再开始下一天；当前日期仍遵守原流水线的安全停止边界。失败或停止后结束剩余日期，仅输出一份人工历史导入汇总通知，说明请求范围、最后完成日期和中断日期；每日对账通知不合并。
+
+所有初始化进度仅存于当前进程，强制退出时可能没有最终通知或最新日志。不提供启动恢复或cancel自动恢复；运维从中断日期重新调用，不确定位置时可重复提交原范围，依靠稳定文档ID覆盖。范围同步不是数据库一致性快照，不处理源表物理删除。
 
 ## 7. 持久任务状态
 

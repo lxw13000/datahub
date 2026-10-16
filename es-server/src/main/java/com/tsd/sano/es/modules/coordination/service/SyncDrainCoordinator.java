@@ -41,8 +41,11 @@ public class SyncDrainCoordinator {
      */
     private boolean tPlusOneDispatcherActive;
 
+    /** 当前分发周期是否经历过drain；人工历史不因cancel继续，新的分发周期才重置。 */
+    private boolean manualHistoryStoppedByDrain;
+
     /**
-     * 当前唯一的T+1活动任务现有调度器按任务串行执行
+     * 当前唯一的T+1活动执行，包含持久任务或人工历史单日运行态，统一串行执行。
      */
     private TPlusOneTaskRuntime activeTPlusOneTask;
 
@@ -87,6 +90,7 @@ public class SyncDrainCoordinator {
         }
 
         coordinatorState = CoordinatorState.DRAINING;
+        manualHistoryStoppedByDrain = true;
         operation = new DrainOperation(UUID.randomUUID().toString(), System.currentTimeMillis());
         if (activeTPlusOneTask != null && activeTPlusOneTask.context != null) {
             activeTPlusOneTask.context.requestDrainStop(operation.operationId);
@@ -136,14 +140,16 @@ public class SyncDrainCoordinator {
             return false;
         }
         tPlusOneDispatcherActive = true;
+        manualHistoryStoppedByDrain = false;
         return true;
     }
 
     /**
-     * 调度器退出后重新评估drain；任务终态持久化必须先于该调用
+     * 分发器退出后重新评估drain；持久任务先确认终态，人工历史先释放单日流水线。
      */
     public synchronized void onTPlusOneDispatcherStopped() {
         tPlusOneDispatcherActive = false;
+        manualHistoryStoppedByDrain = false;
         evaluateDrainLocked();
     }
 
@@ -171,6 +177,41 @@ public class SyncDrainCoordinator {
         }
         activeTPlusOneTask = new TPlusOneTaskRuntime(task);
         return true;
+    }
+
+    /**
+     * 注册人工历史导入的单日内存运行态，不要求或创建对应的任务文档。
+     *
+     * <p>复用同一启动门禁和Reader/Bulk上下文；persistent=false保证其不进入持久任务摘要
+     * 和cancel后的自动恢复列表，人工中断后只能重新调用历史导入接口。</p>
+     */
+    public synchronized boolean tryBeginManualHistoryTask(SanoImportTask runtimeTask) {
+        if (manualHistoryStoppedByDrain || !tryBeginTPlusOneTask(runtimeTask)) {
+            return false;
+        }
+        activeTPlusOneTask.persistent = false;
+        return true;
+    }
+
+    /**
+     * 人工历史是否允许继续下一天；同一分发周期一旦经历drain，即使cancel也只能人工重新提交。
+     */
+    public synchronized boolean isAcceptingManualHistoryWork() {
+        return isAcceptingNewWork() && !manualHistoryStoppedByDrain;
+    }
+
+    /**
+     * 人工历史导入的单日流水线退出后释放内存令牌，不保存任务文档或登记自动续跑。
+     */
+    public synchronized void finishManualHistoryTask(String runtimeTaskId, boolean failed) {
+        if (!matchesActiveTask(runtimeTaskId) || activeTPlusOneTask.persistent) {
+            return;
+        }
+        if (failed && operation != null) {
+            operation.hadBusinessErrors = true;
+        }
+        activeTPlusOneTask = null;
+        evaluateDrainLocked();
     }
 
     /**
@@ -210,7 +251,7 @@ public class SyncDrainCoordinator {
                                                 ImportStatistics statistics,
                                                 boolean persistenceSafe,
                                                 String error) {
-        if (!matchesActiveTask(task.getTaskId())) {
+        if (!matchesActiveTask(task.getTaskId()) || !activeTPlusOneTask.persistent) {
             return;
         }
 
@@ -348,12 +389,16 @@ public class SyncDrainCoordinator {
     private TPlusOneRuntimeSnapshot buildTPlusOneSnapshot(GlobalEsWritePermitManager.Snapshot permits) {
         TPlusOneTaskRuntime active = activeTPlusOneTask;
         ImportContext context = active == null ? null : active.context;
-        PersistentTaskSnapshot persistentTask = active == null
-                ? lastPersistentTask
-                : new PersistentTaskSnapshot(active.taskId, active.indexAlias, active.tableName,
-                active.importDate, active.taskStatus,
-                context == null ? active.lastSafeCheckpointId : context.getStatistics().getLastSuccessId(),
-                false, null);
+        PersistentTaskSnapshot persistentTask = null;
+        if (active == null) {
+            persistentTask = lastPersistentTask;
+        } else if (active.persistent) {
+            persistentTask = new PersistentTaskSnapshot(active.taskId, active.indexAlias, active.tableName,
+                    active.importDate, active.taskStatus,
+                    context == null ? active.lastSafeCheckpointId : context.getStatistics().getLastSuccessId(),
+                    false, null);
+        }
+        // 人工历史导入只有activeTask和流水线运行态，不以持久任务摘要冒充尚未保存的任务文档。
 
         return new TPlusOneRuntimeSnapshot(
                 serviceModeManager.isSyncEnabled() && importProperties.getTPlusOne().isEnabled(),
@@ -541,6 +586,9 @@ public class SyncDrainCoordinator {
          * 当前观察到的持久任务状态
          */
         private String taskStatus;
+
+        /** 是否对应持久任务；人工历史导入为false，不参与持久摘要及cancel自动恢复。 */
+        private boolean persistent = true;
 
         /**
          * Reader/Bulk启动后挂载的单次导入上下文

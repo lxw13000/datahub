@@ -4,6 +4,7 @@ import com.tsd.sano.es.modules.config.EsImportProperties;
 import com.tsd.sano.es.modules.notify.model.NotifyMessage;
 import com.tsd.sano.es.modules.notify.service.NotifyService;
 import com.tsd.sano.es.modules.tplusone.model.ImportStatistics;
+import com.tsd.sano.es.modules.tplusone.model.HistoryImportResult;
 import com.tsd.sano.es.modules.tplusone.model.SanoImportTask;
 import org.apache.commons.lang3.StringUtils;
 import org.slf4j.Logger;
@@ -13,10 +14,10 @@ import org.springframework.stereotype.Service;
 import java.time.Duration;
 
 /**
- * T+1任务业务通知服务。
+ * T+1任务及人工历史导入的业务通知服务。
  *
  * <p>本服务决定T+1任务通知的标题和正文，公共NotifyService只负责通道分发。
- * 消息组装或发送异常只记录日志，不改变已经持久化的任务状态。</p>
+ * 消息组装或发送异常只记录日志，不改变持久任务状态或人工历史执行结果。</p>
  */
 @Service
 public class TPlusOneNotifyService {
@@ -151,6 +152,43 @@ public class TPlusOneNotifyService {
         } catch (Exception error) {
             log.error("===> ES-TPlusOne notify timeout partial failed before send. taskId={}, error={}",
                     taskId(task), error.getMessage(), error);
+        }
+    }
+
+    /**
+     * 人工历史导入只发送一份范围汇总，不逐日发送任务通知；通知失败不影响运行令牌释放。
+     */
+    public void notifyHistoryResult(HistoryImportResult result) {
+        try {
+            String statusText = switch (result.getStatus()) {
+                case SUCCESS -> "成功";
+                case STOPPED -> "已停止，需人工继续";
+                case FAILED -> "失败";
+            };
+            String title = SUBJECT_PREFIX + " ES历史导入" + statusText + " " + result.getTableName();
+            String content = new StringBuilder(512)
+                    .append(title).append('\n')
+                    .append("操作ID：").append(result.getOperationId()).append('\n')
+                    .append("表名：").append(result.getTableName()).append('\n')
+                    .append("请求范围：").append(result.getStartDate()).append(" ~ ").append(result.getEndDate()).append('\n')
+                    .append("结果：").append(statusText).append('\n')
+                    .append("已完成日期数：").append(result.getCompletedDays()).append('\n')
+                    .append("最后完成日期：").append(result.getLastCompletedDate() == null
+                            ? "无" : result.getLastCompletedDate()).append('\n')
+                    .append("中断日期：").append(result.getStatus() == HistoryImportResult.Status.SUCCESS
+                            ? "无" : result.getCurrentDate()).append('\n')
+                    .append("已返回处理成功：").append(result.getSuccessCount()).append('\n')
+                    .append("已返回处理失败：").append(result.getFailedCount()).append('\n')
+                    .append("耗时ms：").append(result.getCostMs()).append('\n')
+                    .append("说明：不写任务文档，不自动续跑；失败当日未返回的部分统计不计入汇总。")
+                    .append("停止后请从中断日期重新提交，不确定进度时可重复提交原范围覆盖写入。")
+                    .append(result.getError() == null ? "" : "\n原因：" + StringUtils.left(result.getError(), 800))
+                    .toString();
+            notifyService.send(new NotifyMessage("HISTORY_IMPORT_" + result.getStatus().name(),
+                    result.getOperationId(), title, content));
+        } catch (Exception error) {
+            log.error("===> ES-TPlusOne history notify failed. operationId={}, error={}",
+                    result.getOperationId(), error.getMessage(), error);
         }
     }
 

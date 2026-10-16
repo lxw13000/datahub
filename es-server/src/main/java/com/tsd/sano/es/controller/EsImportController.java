@@ -157,6 +157,37 @@ public class EsImportController {
     }
 
     /**
+     * 人工初始化MONTH/YEAR历史数据，起止日期均包含，格式yyyyMMdd。
+     *
+     * <p>后台逐日覆盖写入，不写入sano_import_task，不删除已有索引；忙碌时拒绝，
+     * 中断后不自动续跑，需根据日志或通知人工重新提交。建议历史范围截止昨天。</p>
+     */
+    @PostMapping("/importHistoryDateRange")
+    public ResultVO<String> importHistoryDateRange(@RequestParam String tableName,
+                                                  @RequestParam String startDate,
+                                                  @RequestParam String endDate) {
+        if (StringUtils.isBlank(tableName)) {
+            throw new ServiceException("导入表tableName不能为空");
+        }
+        if (StringUtils.isBlank(startDate) || StringUtils.isBlank(endDate)) {
+            throw new ServiceException("导入日期段不能为空，请使用yyyyMMdd");
+        }
+        try {
+            LocalDate start = LocalDate.parse(startDate, IMPORT_DATE_FORMATTER);
+            LocalDate end = LocalDate.parse(endDate, IMPORT_DATE_FORMATTER);
+            if (start.isAfter(end)) {
+                throw new ServiceException("开始日期不能大于结束日期");
+            }
+            if (end.isAfter(LocalDate.now())) {
+                throw new ServiceException("结束日期不能是未来时间");
+            }
+            return ResultVO.successMessage(importTask.importHistoryDateRange(tableName.trim(), start, end));
+        } catch (DateTimeParseException error) {
+            throw new ServiceException("导入日期格式错误，请使用yyyyMMdd，例如：20261015");
+        }
+    }
+
+    /**
      * 人工提交SINGLE全量删除重建；此操作会删除固定索引及全部数据，禁止用GET触发。
      *
      * <p>只接受已启用表名，固定索引、Alias及Mapping从配置读取；后台复用T+1串行执行。</p>
