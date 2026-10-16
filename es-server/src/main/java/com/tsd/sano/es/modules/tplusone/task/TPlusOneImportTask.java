@@ -561,6 +561,7 @@ public class TPlusOneImportTask {
             config.setMappingFile(table.getMappingFile());
             config.setIndexMode(table.getIndexMode());
             config.setFixedIndexName(table.getFixedIndexName());
+            config.setReadMode(table.getReadMode());
             config.setIdColumn(table.getIdColumn());
             config.setDocumentIdColumns(table.getDocumentIdColumns());
             config.setDtColumn(table.getDtColumn());

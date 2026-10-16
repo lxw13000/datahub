@@ -53,7 +53,13 @@ public class SyncTableConfig {
     private String fixedIndexName;
 
     /**
-     * MySQL数值游标字段；未配置documentIdColumns时也作为ES文档ID。
+     * 每日读取方式，默认CURSOR兼容已有表；FULL_DAY整日读取并在未完成时整日重放。
+     * SINGLE人工Bootstrap始终保留原有游标分页，不受每日读取方式影响。
+     */
+    private ReadMode readMode = ReadMode.CURSOR;
+
+    /**
+     * CURSOR的MySQL数值游标字段，同时用于对账最小/最大ID；未配置documentIdColumns时也作为ES文档ID。
      */
     private String idColumn = "id";
 
@@ -122,6 +128,7 @@ public class SyncTableConfig {
         // 枚举取值由Spring配置绑定校验，此处仅补全默认值，不重复转换或校验字符串。
         dtColumnType = dtColumnType == null ? DateColumnType.DATE : dtColumnType;
         indexMode = normalizedIndexMode;
+        readMode = readMode == null ? ReadMode.CURSOR : readMode;
         fixedIndexName = normalizedFixedIndexName;
     }
 

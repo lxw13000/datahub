@@ -3,6 +3,7 @@ package com.tsd.sano.es.modules.tplusone.pipeline;
 import com.tsd.sano.es.core.exception.ServiceException;
 import com.tsd.sano.es.modules.config.EsImportProperties;
 import com.tsd.sano.es.modules.config.IndexMode;
+import com.tsd.sano.es.modules.config.ReadMode;
 import com.tsd.sano.es.modules.index.EsIndexNameResolver;
 import com.tsd.sano.es.modules.tplusone.service.TPlusOneIndexService;
 import com.tsd.sano.es.modules.tplusone.model.TPlusOneImportConfig;
@@ -43,7 +44,7 @@ public class TPlusOneImportService {
     /** 真实索引的创建、优化、alias切换及历史清理组件。 */
     private final TPlusOneIndexService indexService;
 
-    /** MySQL计数及分页读取组件。 */
+    /** MySQL计数及按配置方式读取数据的组件。 */
     private final TPlusOneJdbcReader jdbcReader;
 
     /** ES Bulk队列消费组件。 */
@@ -83,6 +84,11 @@ public class TPlusOneImportService {
         serviceModeManager.requireSyncEnabled();
         // 先补全默认配置，确保后续组件拿到完整的表名、索引名和日期。
         normalizeConfig(config);
+        if (!config.isBootstrap() && config.getReadMode() == ReadMode.FULL_DAY) {
+            // 整日模式没有唯一分页游标。无论旧任务保存过什么ID，都必须从当天完整数据重新执行；
+            // 部署强制停止后的恢复同样走此路径，依靠稳定ES文档ID覆盖，不把部分写入误作可跳过的断点。
+            config.setStartId(0L);
+        }
 
         // 以真实索引名互斥，共享索引的不同日期任务也不能并发进入导入流程。
         String importKey = requireText(config.getIndexName(), "indexName");

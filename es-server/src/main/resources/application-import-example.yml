@@ -129,3 +129,26 @@ sano:
         dt-column: live_day
         # yyyyMMdd整数日期，直接使用整数等值条件，不对MySQL字段使用转换函数。
         dt-column-type: INTEGER_DATE
+      - enabled: true
+        # 代理旗下主播日数据按月保存；同一主播同一天可能归属不同代理。
+        index-mode: MONTH
+        index-alias: sano_proxy_anchor_data
+        table-name: sano_proxy_anchor_data
+        mapping-file: sano_proxy_anchor_data.json
+        # ES文档ID按配置顺序以“_”拼接，整日重放时覆盖同一业务记录。
+        document-id-columns:
+          - proxy_id
+          - anchor_user_id
+          - live_day
+        # 按live_day对账当日数量及最小/最大anchor_user_id。
+        reconcile: true
+        # 月索引永久保存，不自动清理。
+        delete-history-index: false
+        # 每日数据较少，整日一次读取后沿用Bulk分批写入；未完成时重放全天。
+        # 未配置read-mode的表默认CURSOR；SINGLE人工Bootstrap始终使用游标分页。
+        read-mode: FULL_DAY
+        # 本表不按此字段分页，仅用于对账；ES文档ID由上述三个字段组成。
+        id-column: anchor_user_id
+        dt-column: live_day
+        # yyyyMMdd整数日期，例如20261015。
+        dt-column-type: INTEGER_DATE

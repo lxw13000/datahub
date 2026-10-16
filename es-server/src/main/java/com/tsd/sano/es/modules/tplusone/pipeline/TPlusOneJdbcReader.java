@@ -2,6 +2,7 @@ package com.tsd.sano.es.modules.tplusone.pipeline;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.tsd.sano.es.core.exception.ServiceException;
+import com.tsd.sano.es.modules.config.ReadMode;
 import com.tsd.sano.es.modules.tplusone.model.ImportBatch;
 import com.tsd.sano.es.modules.tplusone.model.ImportContext;
 import com.tsd.sano.es.modules.tplusone.model.TPlusOneImportConfig;
@@ -23,8 +24,8 @@ import java.util.regex.Pattern;
 /**
  * JDBC数据读取器。
  *
- * <p>负责按主键游标分页读取数据库表数据，并写入导入队列。
- * 当前方案适合单表百万到千万级T+1同步，避免使用offset分页带来的深分页性能问题。</p>
+ * <p>默认按数值游标分页读取，避免offset深分页；小数据量表可配置整日一次读取。
+ * 两种方式共用队列、内存预算及停止边界，ES写入仍由原有Bulk流水线分批完成。</p>
  */
 @Service
 public class TPlusOneJdbcReader {
@@ -128,10 +129,14 @@ public class TPlusOneJdbcReader {
     }
 
     /**
-     * 按主键游标分页读取数据，并写入Reader -> Bulk队列。
+     * 按配置分页或整日读取数据，并写入Reader -> Bulk队列。
+     *
+     * <p>FULL_DAY将整日结果作为一个批次，安全ID保持0；未完成时整日重放。
+     * 已越过查询边界的SQL允许返回并完整入队，不因随后到达的drain丢弃已读数据。</p>
      */
     public void readToQueue(ImportContext context) {
         TPlusOneImportConfig config = requireConfig(context);
+        boolean fullDay = !config.isBootstrap() && config.getReadMode() == ReadMode.FULL_DAY;
         String idColumn = requireColumnName(config.getIdColumn(), "idColumn");
         int pageSize = context.getProperties().getTPlusOne().getReadBatchSize();
         long lastId = context.getStatistics().getLastId();
@@ -157,8 +162,10 @@ public class TPlusOneJdbcReader {
                     return;
                 }
 
+                // FULL_DAY一次持有整日结果，按前置COUNT预留而不是只为一页预留；查询后仍按结果校准。
+                long estimatedRows = fullDay ? Math.max(1L, context.getStatistics().getTotal().get()) : pageSize;
                 TPlusOneMemoryLimiter.Reservation reservation = memoryLimiter.reserve(
-                        (long) pageSize * INITIAL_ESTIMATED_ROW_BYTES,
+                        estimatedRows * INITIAL_ESTIMATED_ROW_BYTES,
                         context::isAborted
                 );
                 boolean reservationTransferred = false;
@@ -192,8 +199,8 @@ public class TPlusOneJdbcReader {
                         // Bulk失败时及时退出额度扩容等待，当前Reservation由finally归还。
                         reservation.resize(estimateBatchBytes(rows), context::isAborted);
 
-                        // 使用当前页最后一条ID作为下一页游标，避免offset深分页。
-                        lastId = extractLastId(rows, idColumn);
+                        // 整日数据无需排序且ID可能重复，不能取末行ID作为恢复断点；分页模式保持原规则。
+                        lastId = fullDay ? 0L : extractLastId(rows, idColumn);
                         context.getStatistics().setLastId(lastId);
                         context.getStatistics().getRead().addAndGet(rows.size());
 
@@ -209,8 +216,8 @@ public class TPlusOneJdbcReader {
                                 context.getStatistics().getRead().get(),
                                 context.getStatistics().getTotal().get());
 
-                        if (rows.size() < pageSize) {
-                            // 当前页不足一整页，说明已读到最后一页，避免再次查询空页。
+                        if (fullDay || rows.size() < pageSize) {
+                            // 整日模式只查询一次；分页模式不足一页时结束，避免再次查询空页。
                             offerEndSignals(context);
                             log.info("===> ES-TPlusOne read finished. table={}, read={}",
                                     config.getTableName(), context.getStatistics().getRead().get());
@@ -246,17 +253,17 @@ public class TPlusOneJdbcReader {
     }
 
     /**
-     * 读取一页数据，供调试或后续服务编排复用。
+     * 读取一个数据批次；CURSOR追加游标、排序和LIMIT，FULL_DAY仅使用每日日期条件。
+     * SINGLE人工Bootstrap始终按原有游标分页，避免误将整表装入内存。
      */
     public List<Map<String, Object>> fetchPage(ImportContext context, long lastId, int pageSize) {
         TPlusOneImportConfig config = requireConfig(context);
+        boolean fullDay = !config.isBootstrap() && config.getReadMode() == ReadMode.FULL_DAY;
         QueryCondition condition = buildCondition(config);
         String tableName = requireTableName(config.getTableName());
         String idColumn = requireColumnName(config.getIdColumn(), "idColumn");
 
         List<Object> params = new ArrayList<>(condition.params());
-        params.add(lastId);
-        params.add(pageSize);
 
         // 金币记录表主键包含user_id，按dt和id分页时强制使用专用联合索引，避免优化器回退到主键。
         String indexHint = StringUtils.equals(tableName, "sano_wallet_coin_record")
@@ -265,18 +272,21 @@ public class TPlusOneJdbcReader {
                 : "";
         // idColumn和tableName已校验，只拼接标识符；值全部使用参数绑定。
         String sql = "SELECT * FROM " + tableName + indexHint
-                + " WHERE " + condition.whereSql()
-                + " AND " + idColumn + " > ?"
-                + " ORDER BY " + idColumn + " ASC"
-                + " LIMIT ?";
+                + " WHERE " + condition.whereSql();
+        if (!fullDay) {
+            // FULL_DAY不按ID过滤，避免同一天不同代理下重复的主播ID被游标条件遗漏。
+            sql += " AND " + idColumn + " > ? ORDER BY " + idColumn + " ASC LIMIT ?";
+            params.add(lastId);
+            params.add(pageSize);
+        }
 
         try {
             long startTime = System.currentTimeMillis();
             List<Map<String, Object>> rows = jdbcTemplate.queryForList(sql, params.toArray());
             long costMs = System.currentTimeMillis() - startTime;
 
-            log.info("===> ES-TPlusOne mysql page query. table={}, size={}, lastId={}, pageSize={}, costMs={}",
-                    tableName, rows.size(), lastId, pageSize, costMs);
+            log.info("===> ES-TPlusOne mysql batch query. table={}, readMode={}, size={}, lastId={}, pageSize={}, costMs={}",
+                    tableName, fullDay ? ReadMode.FULL_DAY : ReadMode.CURSOR, rows.size(), lastId, pageSize, costMs);
             return rows;
         } catch (Exception e) {
             log.error("===> ES-TPlusOne read sql failed. table={}, sql={}, params={}, lastId={}, pageSize={}, error={}",

@@ -47,4 +47,9 @@ public interface EsIndexAlias {
      */
     String SANO_ANCHOR_DATA = "sano_anchor_data";
 
+    /**
+     * 代理旗下主播日数据，聚合MONTH月物理索引。
+     */
+    String SANO_PROXY_ANCHOR_DATA = "sano_proxy_anchor_data";
+
 }

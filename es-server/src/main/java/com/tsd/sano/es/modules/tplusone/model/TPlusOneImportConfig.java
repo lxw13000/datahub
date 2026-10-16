@@ -2,6 +2,7 @@ package com.tsd.sano.es.modules.tplusone.model;
 
 import com.tsd.sano.es.modules.config.IndexMode;
 import com.tsd.sano.es.modules.config.DateColumnType;
+import com.tsd.sano.es.modules.config.ReadMode;
 import lombok.Getter;
 import lombok.Setter;
 
@@ -60,8 +61,11 @@ public class TPlusOneImportConfig {
      */
     private boolean bootstrap;
 
+    /** 每日读取方式，默认游标分页；FULL_DAY不使用ID断点，SINGLE Bootstrap仍按游标分页。 */
+    private ReadMode readMode = ReadMode.CURSOR;
+
     /**
-     * MySQL数值游标字段；未配置documentIdColumns时也作为ES文档ID。
+     * CURSOR的MySQL数值游标字段，同时用于对账最小/最大ID；未配置documentIdColumns时也作为ES文档ID。
      */
     private String idColumn = "id";
 
@@ -76,7 +80,7 @@ public class TPlusOneImportConfig {
     private DateColumnType dtColumnType = DateColumnType.DATE;
 
     /**
-     * 起始游标ID，续跑时从任务保存的连续安全断点last_success_id之后继续读取。
+     * CURSOR起始游标ID，续跑时从连续安全断点之后读取；FULL_DAY每日任务始终归零并整日重读。
      */
     private long startId;
 
