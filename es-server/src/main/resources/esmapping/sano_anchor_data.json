@@ -1,0 +1,102 @@
+{
+  "settings": {
+    "index": {
+      "number_of_shards": "1",
+      "number_of_replicas": "0",
+      "max_result_window": 20000
+    }
+  },
+  "mappings": {
+    "dynamic": "strict",
+    "properties": {
+      "live_day": {
+        "type": "integer"
+      },
+      "user_id": {
+        "type": "integer"
+      },
+      "user_live_type": {
+        "type": "integer"
+      },
+      "anchor_level": {
+        "type": "integer"
+      },
+      "live_minute": {
+        "type": "integer"
+      },
+      "sound_minute": {
+        "type": "integer"
+      },
+      "video_minute": {
+        "type": "integer"
+      },
+      "many_video_minute": {
+        "type": "integer"
+      },
+      "proxy_id": {
+        "type": "integer"
+      },
+      "parent_proxy_id": {
+        "type": "integer"
+      },
+      "new_cares": {
+        "type": "integer"
+      },
+      "viewers": {
+        "type": "integer"
+      },
+      "yesterday_settled": {
+        "type": "integer"
+      },
+      "sex": {
+        "type": "integer"
+      },
+      "income": {
+        "type": "long"
+      },
+      "sound_income": {
+        "type": "long"
+      },
+      "video_income": {
+        "type": "long"
+      },
+      "many_video_income": {
+        "type": "long"
+      },
+      "chat_income": {
+        "type": "long"
+      },
+      "income_luxurious": {
+        "type": "long"
+      },
+      "income_luxurious_consume": {
+        "type": "long"
+      },
+      "income_lucky": {
+        "type": "long"
+      },
+      "income_lucky_consume": {
+        "type": "long"
+      },
+      "income_game": {
+        "type": "long"
+      },
+      "income_game_consume": {
+        "type": "long"
+      },
+      "proxy_income": {
+        "type": "long"
+      },
+      "parent_proxy_income": {
+        "type": "long"
+      },
+      "create_time": {
+        "type": "date",
+        "format": "yyyy-MM-dd'T'HH:mm:ss || yyyy-MM-dd HH:mm:ss || yyyy-MM-dd || yyyy-MM || yyyy || epoch_millis"
+      },
+      "country_code": {
+        "type": "keyword"
+      }
+    }
+  }
+}

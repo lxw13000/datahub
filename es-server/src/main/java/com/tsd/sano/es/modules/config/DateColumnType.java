@@ -9,5 +9,8 @@ public enum DateColumnType {
     DATE,
 
     /** DATETIME或TIMESTAMP字段按当天开始至次日开始的左闭右开范围查询。 */
-    DATETIME
+    DATETIME,
+
+    /** yyyyMMdd格式的整数日期字段，按业务日期转换后的整数等值查询。 */
+    INTEGER_DATE
 }

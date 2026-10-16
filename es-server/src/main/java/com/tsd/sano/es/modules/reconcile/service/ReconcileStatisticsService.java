@@ -25,6 +25,7 @@ import org.springframework.stereotype.Service;
 import java.io.IOException;
 import java.sql.Timestamp;
 import java.time.LocalDate;
+import java.time.format.DateTimeFormatter;
 import java.util.ArrayList;
 import java.util.List;
 
@@ -111,6 +112,16 @@ public class ReconcileStatisticsService {
                 businessCondition = "1 = 1";
             } else {
                 businessCondition = switch (tableConfig.getDtColumnType()) {
+                    case INTEGER_DATE -> {
+                        int day = Integer.parseInt(DateTimeFormatter.BASIC_ISO_DATE.format(statisticsDate));
+                        parameters.add(day);
+                        if (mode == IndexMode.MONTH || mode == IndexMode.YEAR) {
+                            // 共享物理索引必须按整数业务日期过滤，不能将yyyy-MM-dd字符串用于整数列。
+                            esCondition = Query.of(query -> query.term(term -> term.field(tableConfig.getDtColumn())
+                                    .value(day)));
+                        }
+                        yield tableConfig.getDtColumn() + " = ?";
+                    }
                     case DATE -> {
                         parameters.add(java.sql.Date.valueOf(statisticsDate));
                         if (mode == IndexMode.MONTH || mode == IndexMode.YEAR) {

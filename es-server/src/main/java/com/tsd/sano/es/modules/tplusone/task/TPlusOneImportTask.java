@@ -562,6 +562,7 @@ public class TPlusOneImportTask {
             config.setIndexMode(table.getIndexMode());
             config.setFixedIndexName(table.getFixedIndexName());
             config.setIdColumn(table.getIdColumn());
+            config.setDocumentIdColumns(table.getDocumentIdColumns());
             config.setDtColumn(table.getDtColumn());
             config.setDtColumnType(table.getDtColumnType());
             config.setDeleteHistoryIndex(table.isDeleteHistoryIndex());

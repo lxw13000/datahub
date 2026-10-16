@@ -118,7 +118,8 @@ sano:
     # table-name是同步表唯一标识；index-alias为空时默认等于table-name，仅作为业务查询Alias。
     # reconcile未配置时默认true；同步流程统一异步调用，对账入口按单表配置决定是否实际执行。
     # index-mode支持DAY/MONTH/YEAR/SINGLE；未配置默认DAY，SINGLE必须配置fixed-index-name。
-    # id-column用于MySQL游标和ES文档ID；程序按dt-column/dt-column-type生成每日日期条件。
+    # id-column用于MySQL游标；document-id-columns为空时也作为ES文档ID。
+    # 程序按dt-column/dt-column-type生成每日条件，支持DATE/DATETIME/INTEGER_DATE。
     # 仅DAY、delete-history-index=true、reserve-days>0同时满足时自动清理；其他情况永久保留。
     tables:
       - enabled: true
@@ -214,3 +215,23 @@ sano:
         # 按下单时间当天左闭右开范围读取；历史订单变更由人工重跑创建日期或全量重建。
         dt-column: create_time
         dt-column-type: DATETIME
+      - enabled: true
+        # 主播日数据每天读取昨日，写入所属月索引；创建时即绑定Alias。
+        index-mode: MONTH
+        index-alias: sano_anchor_data
+        table-name: sano_anchor_data
+        mapping-file: sano_anchor_data.json
+        # ES文档ID按顺序以“_”拼接；未配置或集合为空时使用id-column。
+        # 同一主播不同日期必须使用不同文档ID，避免月索引内相互覆盖。
+        document-id-columns:
+          - live_day
+          - user_id
+        # 按live_day对账当日数量、最小和最大user_id，而不是整个月的数据。
+        reconcile: true
+        # 月索引永久保留，不自动删除。
+        delete-history-index: false
+        # 单日内user_id唯一，用于MySQL递增分页和续跑断点。
+        id-column: user_id
+        dt-column: live_day
+        # yyyyMMdd整数日期，直接使用整数等值条件，不对MySQL字段使用转换函数。
+        dt-column-type: INTEGER_DATE

@@ -207,6 +207,11 @@ public class TPlusOneBulkWriter {
         TPlusOneImportConfig config = requireConfig(context);
         String indexName = requireText(config.getIndexName(), "indexName");
         String idColumn = requireText(config.getIdColumn(), "idColumn");
+        // 复合ID仅影响ES写入；Reader分页和安全断点仍使用数值idColumn。
+        List<String> documentIdColumns = config.getDocumentIdColumns();
+        if (documentIdColumns == null || documentIdColumns.isEmpty()) {
+            documentIdColumns = List.of(idColumn);
+        }
         int maxAttempt = Math.max(0, properties.getTPlusOne().getRetryTimes()) + 1;
 
         // 请求在重试前只构建一次；BulkRequest构建完成后不可变，可使用相同文档ID安全重试。
@@ -215,13 +220,13 @@ public class TPlusOneBulkWriter {
         int validCount = 0;
         for (Map<String, Object> row : rows) {
             // 文档ID必须稳定，保证重跑或请求重试时ES写入幂等。
-            String documentId = extractDocumentId(row, idColumn);
+            String documentId = extractDocumentId(row, documentIdColumns);
             if (StringUtils.isBlank(documentId)) {
                 context.getStatistics().getFailed().incrementAndGet();
                 logImportFailedId(context, null, "blank_document_id",
-                        "document id is blank, idColumn=" + idColumn);
-                log.warn("===> ES-TPlusOne skip row because document id is blank. idColumn={}, row={}",
-                        idColumn, row);
+                        "document id field is blank, documentIdColumns=" + documentIdColumns);
+                log.warn("===> ES-TPlusOne skip row because document id field is blank. documentIdColumns={}, row={}",
+                        documentIdColumns, row);
                 continue;
             }
             builder.operations(operation -> operation.index(index -> index
@@ -255,7 +260,7 @@ public class TPlusOneBulkWriter {
                     // 空ID已在构建阶段单独统计；这里只统计并记录实际进入请求但最终发送失败的文档。
                     context.getStatistics().getFailed().addAndGet(validCount);
                     for (Map<String, Object> row : rows) {
-                        String documentId = extractDocumentId(row, idColumn);
+                        String documentId = extractDocumentId(row, documentIdColumns);
                         if (StringUtils.isBlank(documentId)) {
                             continue;
                         }
@@ -358,16 +363,27 @@ public class TPlusOneBulkWriter {
     /**
      * 获取ES文档ID。
      *
-     * <p>优先使用业务主键。若主键缺失则跳过该条数据，避免随机ID造成重跑重复文档。</p>
+     * <p>单字段保持原值，多个字段按配置顺序以“_”连接。任一字段缺失均视为无效ID，
+     * 不退回部分字段或随机ID，避免跨日期覆盖和重跑产生重复文档。</p>
      */
-    private String extractDocumentId(Map<String, Object> row, String idColumn) {
-        Object value = row.get(idColumn);
-        if (value != null && StringUtils.isNotBlank(value.toString())) {
-            return value.toString();
+    private String extractDocumentId(Map<String, Object> row, List<String> documentIdColumns) {
+        if (documentIdColumns.size() == 1) {
+            // 默认单字段走原有路径，不为已有流水表额外构建字符串缓冲区。
+            Object value = row.get(documentIdColumns.getFirst());
+            return value == null || StringUtils.isBlank(value.toString()) ? null : value.toString();
         }
-
-        // 缺少稳定业务ID时不能随机生成，否则重跑会产生重复文档。
-        return null;
+        StringBuilder documentId = new StringBuilder();
+        for (String column : documentIdColumns) {
+            Object value = row.get(column);
+            if (value == null || StringUtils.isBlank(value.toString())) {
+                return null;
+            }
+            if (!documentId.isEmpty()) {
+                documentId.append('_');
+            }
+            documentId.append(value);
+        }
+        return documentId.toString();
     }
 
     /**

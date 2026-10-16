@@ -288,7 +288,7 @@ public class TPlusOneJdbcReader {
     /**
      * 生成查询条件。
      *
-     * <p>DATE按日期等值过滤，DATETIME按当天左闭右开时间范围过滤；
+     * <p>DATE按日期等值过滤，INTEGER_DATE按yyyyMMdd整数等值过滤，DATETIME按当天时间范围过滤；
      * 查询条件只由程序生成，不支持外部配置SQL片段。</p>
      */
     private QueryCondition buildCondition(TPlusOneImportConfig config) {
@@ -305,6 +305,9 @@ public class TPlusOneJdbcReader {
         return switch (config.getDtColumnType()) {
             // DATE按等值过滤，兼容已有dt字段及联合索引。
             case DATE -> new QueryCondition(dtColumn + " = ?", List.of(DATE_FORMATTER.format(importDate)));
+            // 直接比较整数列，不对源字段使用函数，保留已有日期索引的使用条件。
+            case INTEGER_DATE -> new QueryCondition(dtColumn + " = ?",
+                    List.of(Integer.parseInt(DateTimeFormatter.BASIC_ISO_DATE.format(importDate))));
             case DATETIME -> {
                 // 左闭右开区间避免23:59:59遗漏带毫秒或微秒的记录，也适用于TIMESTAMP。
                 Timestamp startTime = Timestamp.valueOf(importDate.atStartOfDay());

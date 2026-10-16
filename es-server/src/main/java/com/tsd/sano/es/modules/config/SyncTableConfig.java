@@ -4,6 +4,8 @@ import lombok.Getter;
 import lombok.Setter;
 import org.apache.commons.lang3.StringUtils;
 
+import java.util.List;
+
 /**
  * 单张业务表的同步配置。
  */
@@ -37,6 +39,12 @@ public class SyncTableConfig {
     private String mappingFile;
 
     /**
+     * ES文档ID字段，按配置顺序以“_”连接；未配置或集合为空时使用idColumn。
+     * 字段组合必须在目标物理索引内唯一，且各字段值不能为null或空白。
+     */
+    private List<String> documentIdColumns = List.of();
+
+    /**
      * 物理索引组织方式；不配置时保持现有按日索引行为。
      */
     private IndexMode indexMode = IndexMode.DAY;
@@ -45,7 +53,7 @@ public class SyncTableConfig {
     private String fixedIndexName;
 
     /**
-     * 主键字段，用于游标分页和ES文档ID。
+     * MySQL数值游标字段；未配置documentIdColumns时也作为ES文档ID。
      */
     private String idColumn = "id";
 
@@ -55,7 +63,7 @@ public class SyncTableConfig {
     private String dtColumn = "dt";
 
     /**
-     * 日期字段类型；DATE按等值查询，DATETIME按当天左闭右开范围查询。
+     * 日期字段类型；DATE/INTEGER_DATE按等值查询，DATETIME按当天左闭右开范围查询。
      */
     private DateColumnType dtColumnType = DateColumnType.DATE;
 
@@ -90,6 +98,13 @@ public class SyncTableConfig {
         validateText(normalizedIdColumn, "id-column");
         validateText(normalizedDtColumn, "dt-column");
 
+        // 保留空集合的默认语义，不把分页游标和复合文档ID绑定为同一种职责。
+        List<String> normalizedDocumentIdColumns = documentIdColumns == null ? List.of()
+                : documentIdColumns.stream().map(StringUtils::trimToEmpty).toList();
+        for (String column : normalizedDocumentIdColumns) {
+            validateText(column, "document-id-columns entry");
+        }
+
         if (normalizedIndexMode == IndexMode.SINGLE) {
             validateText(normalizedFixedIndexName, "fixed-index-name");
             if (StringUtils.equals(normalizedFixedIndexName, normalizedIndexAlias)) {
@@ -101,6 +116,7 @@ public class SyncTableConfig {
         tableName = normalizedTableName;
         indexAlias = normalizedIndexAlias;
         mappingFile = normalizedMappingFile;
+        documentIdColumns = normalizedDocumentIdColumns;
         idColumn = normalizedIdColumn;
         dtColumn = normalizedDtColumn;
         // 枚举取值由Spring配置绑定校验，此处仅补全默认值，不重复转换或校验字符串。

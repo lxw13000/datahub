@@ -6,6 +6,7 @@ import lombok.Getter;
 import lombok.Setter;
 
 import java.time.LocalDate;
+import java.util.List;
 
 /**
  * 单次ES导入任务配置。
@@ -33,6 +34,9 @@ public class TPlusOneImportConfig {
      */
     private String mappingFile;
 
+    /** ES文档ID字段，按顺序以“_”连接；未配置或集合为空时使用idColumn。 */
+    private List<String> documentIdColumns = List.of();
+
     /**
      * MySQL源表名。
      */
@@ -57,7 +61,7 @@ public class TPlusOneImportConfig {
     private boolean bootstrap;
 
     /**
-     * 主键字段，用于游标分页和ES文档ID。
+     * MySQL数值游标字段；未配置documentIdColumns时也作为ES文档ID。
      */
     private String idColumn = "id";
 
@@ -67,7 +71,7 @@ public class TPlusOneImportConfig {
     private String dtColumn = "dt";
 
     /**
-     * 分区日期字段类型，只支持DATE或DATETIME。
+     * 每日日期条件类型，支持DATE、DATETIME及yyyyMMdd整数形式的INTEGER_DATE。
      */
     private DateColumnType dtColumnType = DateColumnType.DATE;
 
