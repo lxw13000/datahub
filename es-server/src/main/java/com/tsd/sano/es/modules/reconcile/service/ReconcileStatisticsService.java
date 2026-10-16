@@ -219,18 +219,25 @@ public class ReconcileStatisticsService {
     /**
      * 组织并发送当前模块的统计对账结果。
      *
-     * <p>匹配、不匹配和执行失败都发送消息；通知异常不能改变对账结果或调用方同步状态。</p>
+     * <p>每次结果只发送一份中文通知；内部状态及事件标识不变，通知异常不改变对账或同步状态。</p>
      */
     private void notifyResult(ReconcileResult result) {
         try {
-            String title = SUBJECT_PREFIX + " ES数据对账 " + result.status() + " " + result.indexName();
+            // 中文仅用于消息展示，不修改枚举值或下游识别使用的RECONCILE_*事件标识。
+            String statusText = switch (result.status()) {
+                case MATCHED -> "匹配成功";
+                case MIS_MATCHED -> "数据不一致";
+                case MYSQL_EMPTY -> "MySQL无数据，未对账";
+                case FAILED -> "对账执行失败";
+            };
+            String title = SUBJECT_PREFIX + " ES数据对账 " + statusText + " " + result.indexName();
             StringBuilder content = new StringBuilder(480)
                     .append(title).append('\n')
                     .append("表名：").append(result.tableName()).append('\n')
                     .append("索引：").append(result.indexName()).append('\n')
                     .append("统计范围：").append(result.reconcileDate() == null
                             ? "全表现状（SINGLE）" : result.reconcileDate()).append('\n')
-                    .append("结果：").append(result.status()).append('\n')
+                    .append("结果：").append(statusText).append('\n')
                     .append("MySQL：").append(formatStatistics(result.mysql())).append('\n')
                     .append("Elasticsearch：").append(formatStatistics(result.elasticsearch()));
             if (StringUtils.isNotBlank(result.error())) {
@@ -252,15 +259,15 @@ public class ReconcileStatisticsService {
     }
 
     /**
-     * 格式化单侧统计结果，未成功取得时明确显示不可用。
+     * 中文展示单侧统计；统计未取得显示“未获取”，空数据的ID显示“无”。
      */
     private String formatStatistics(ReconcileResult.Statistics statistics) {
         if (statistics == null) {
-            return "N/A";
+            return "未获取";
         }
-        return "count=" + statistics.count()
-                + ", minId=" + statistics.minId()
-                + ", maxId=" + statistics.maxId();
+        return "计数=" + statistics.count()
+                + "，最小ID=" + (statistics.minId() == null ? "无" : statistics.minId())
+                + "，最大ID=" + (statistics.maxId() == null ? "无" : statistics.maxId());
     }
 
     /**

@@ -10,6 +10,7 @@
 - `sano_import_task` 是当前唯一的同步内部索引。
 - `/ready` 严格检查业务 Alias 和 T+1 任务索引。
 - `/internal/sync/drain` 在升级前停止新任务，并等待现有任务到达安全断点。
+- T+1支持DAY/MONTH/YEAR/SINGLE；现有配置表仍为DAY，具体新表接入另行确认。SINGLE人工全量重建操作见第18节。
 
 当前不再使用：
 
@@ -511,3 +512,138 @@ curl -sS http://127.0.0.1:9003/health | jq .
 [ ] query临时容器已删除
 [ ] 日志没有持续WARN/ERROR
 ```
+
+## 18. 多周期索引同步管理
+
+### 18.1 配置与首次发布
+
+四种模式共用原有T+1调度、资源参数和部署脚本，不新增Compose开关。所有现有表已显式配置`index-mode: DAY`，本次发布不自动切换其模式，也不新增直播、用户等业务表。
+
+| index-mode | 物理名称 | 初始化和Alias | 自动删除 |
+| --- | --- | --- | --- |
+| DAY | `indexAlias_yyyyMMdd` | 按日导入成功后绑定Alias | 仅删除开关true且保留天数>0时生效 |
+| MONTH | `indexAlias_yyyyMM` | 不存在则创建并绑定Alias，后续每日复用 | 永不自动删除 |
+| YEAR | `indexAlias_yyyy` | 不存在则创建并绑定Alias，后续每日复用 | 永不自动删除 |
+| SINGLE | `fixed-index-name` | 人工全量删除重建时创建并绑定Alias | 永不自动删除 |
+
+每日任务仍按`dt-column`及`dt-column-type`读取一个业务日期，文档ID使用`id-column`。需要同步修改时，应选用能反映修改的配置日期字段，不在程序中写死update_time。where-sql已移除，不支持传入任意SQL片段。
+
+DAY的delete-history-index默认false，reserve-days可不配置；未配置、为0或负数均不自动删除。MONTH/YEAR/SINGLE即使写了删除开关和保留天数也不自动删除，由运维维护。SINGLE人工重建不属于自动清理，调用后会删除旧固定索引及全部数据。
+
+### 18.2 SINGLE人工全量删除重建
+
+此操作仅用于后续已经完成配置和Mapping确认的SINGLE表。以下sample_table、sample_table_v1只是说明示例，不是当前已接入的业务表：
+
+```yaml
+# 放在sano.import.tables下；具体表字段、Mapping及连接环境必须先确认。
+- enabled: true
+  index-mode: SINGLE
+  table-name: sample_table
+  index-alias: sample_table
+  fixed-index-name: sample_table_v1
+  mapping-file: sample_table.json
+  id-column: id
+  # 仅为示例，实际使用能反映新增、修改的日期字段。
+  dt-column: update_time
+  dt-column-type: DATETIME
+  reconcile: true
+  # 固定索引不自动删除；人工重建仍会明确删除该索引全部数据。
+  delete-history-index: false
+```
+
+配置生效后，先确认调用对象为常驻all实例，而不是临时query实例。TOKEN使用部署脚本内置的有效Token，不需要修改脚本或向部署命令追加Token配置。为避免误操作，下列Token和表名必须由操作者明确填写；命令不会自行执行：
+
+测试环境：
+
+```bash
+BASE_URL='http://127.0.0.1:9003'
+TOKEN='填写测试部署脚本内置的有效Token'
+TABLE_NAME='填写已确认的SINGLE表名'
+
+curl -fsS -X POST --get \
+  -H "token: ${TOKEN}" \
+  --data-urlencode "tableName=${TABLE_NAME}" \
+  "${BASE_URL}/import/rebuildSingleIndex" | jq .
+```
+
+正式环境只有在测试通过并明确允许删除旧固定索引后，才填写正式地址及表名执行：
+
+```bash
+BASE_URL='http://127.0.0.1:8002'
+TOKEN='填写正式部署脚本内置的有效Token'
+TABLE_NAME='填写已确认允许全量删除重建的SINGLE表名'
+
+curl -fsS -X POST --get \
+  -H "token: ${TOKEN}" \
+  --data-urlencode "tableName=${TABLE_NAME}" \
+  "${BASE_URL}/import/rebuildSingleIndex" | jq .
+```
+
+接口只持久化并提交后台串行执行，不代表全量已完成。后台实际执行时删除旧固定索引、创建新索引并绑定Alias，再全表导入；查询会短暂不可用，随后数据逐步可见，不保留旧索引兜底。
+
+Bootstrap只有一条固定任务，ID为`tableName_BOOTSTRAP_fixedIndexName`，import_date为空。已SUCCESS或FAILED可再次人工提交；PENDING/RUNNING/TIMEOUT_PARTIAL不重复重置。暂停和drain后的续跑复用本轮索引与安全断点，不重新删除。
+
+检查任务示例（测试环境）：
+
+```bash
+ES_URL='http://127.0.0.1:9211'
+ES_PASSWORD='填写实际ES密码'
+FIXED_INDEX_NAME='填写该表配置的固定索引名'
+TASK_ID="${TABLE_NAME}_BOOTSTRAP_${FIXED_INDEX_NAME}"
+
+curl -fsS -u "elastic:${ES_PASSWORD}" \
+  "${ES_URL}/sano_import_task/_doc/${TASK_ID}" | jq '{found, task: ._source}'
+```
+
+正式环境核查时将ES_URL改为`http://127.0.0.1:9201`并填写正式ES凭据。确认固定任务status为SUCCESS后，该表每日任务才允许创建和执行；其他表不受该门禁影响。源表为空仍会创建空固定索引并成功。固定索引丢失不会由每日任务自动补建，需要人工处理。
+
+若全新环境第一张启用表就是尚无Alias的SINGLE表，严格/ready仍可能返回503。按第8节先用Compose启动并创建任务索引，再调用上述人工全量接口；Alias创建后再次确认/ready。不要直接用safe脚本完成首次Bootstrap，也不要为了让部署通过而放宽ready。
+
+### 18.3 每日补数和对账
+
+MONTH/YEAR按日补数继续使用原接口，只覆盖该日期读取到的业务ID，不删除共享物理索引。重复提交已存在任务不重置其SUCCESS/FAILED，处理已有失败任务仍需人工确认原任务状态，不能把再次请求当成强制重跑。
+
+测试环境单表日期补数：
+
+```bash
+BASE_URL='http://127.0.0.1:9003'
+TOKEN='填写测试部署脚本内置的有效Token'
+TABLE_NAME='填写已启用的同步表名'
+START_DATE='20261014'
+END_DATE='20261014'
+
+curl -fsS --get -H "token: ${TOKEN}" \
+  --data-urlencode "tableName=${TABLE_NAME}" \
+  --data-urlencode "startDate=${START_DATE}" \
+  --data-urlencode "endDate=${END_DATE}" \
+  "${BASE_URL}/import/importTableDateRange" | jq .
+```
+
+DAY/MONTH/YEAR人工对账必须提供业务日期：
+
+```bash
+RECONCILE_DATE='20261014'
+curl -fsS --get -H "token: ${TOKEN}" \
+  --data-urlencode "tableName=${TABLE_NAME}" \
+  --data-urlencode "date=${RECONCILE_DATE}" \
+  "${BASE_URL}/import/reconcile" | jq .
+```
+
+SINGLE人工对账不需要日期，固定统计全表现状：
+
+```bash
+TABLE_NAME='填写已启用的SINGLE表名'
+curl -fsS --get -H "token: ${TOKEN}" \
+  --data-urlencode "tableName=${TABLE_NAME}" \
+  "${BASE_URL}/import/reconcile" | jq .
+```
+
+上述对账是否真正执行仍由单表reconcile决定；结果通过Lark通知，不自动补数或删除ES残留。MySQL为空时只通知MYSQL_EMPTY并跳过ES统计，不表示双方匹配。正式环境使用同一组接口，将BASE_URL改为`http://127.0.0.1:8002`并确认Token和表名。
+
+### 18.4 优雅升级及回滚
+
+新模式仍按第9、11、12节使用原safe升级、状态检查和drain/cancel命令，不需要新增部署参数。首次发布现有表全部保持DAY，后续具体表切换由运维安排。
+
+回滚目标若仅支持DAY，兼容的DAY表仍可正常同步、补数和对账；新模式表的配置、任务、索引和Alias由运维技术人员确认处理，不能让旧代码按日命名误写入新索引。不概括为停止全部任务或只保留查询，也不增加程序回滚门禁。已支持四种模式的版本之间回滚，不存在该DAY专有限制，但仍需人工核对其他版本差异。
+
+本次未连接真实MySQL/ES进行端到端及服务器safe升级验证；上线前应在测试环境完成实际导入、对账、故障及升级验证，再决定正式部署。

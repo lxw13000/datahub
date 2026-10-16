@@ -111,7 +111,13 @@ compose_up_detached() {
 }
 
 container_exists() {
-  docker ps -a --format '{{.Names}}' | grep -Fxq "$1"
+  local container_names
+  container_names="$(docker ps -a --format '{{.Names}}')" || {
+    log "ERROR: Docker容器列表查询失败，不能据此判定容器不存在。"
+    return 2
+  }
+  # 不使用grep -q提前关闭管道，避免pipefail把Docker的SIGPIPE误判成容器不存在。
+  printf '%s\n' "${container_names}" | grep -Fx "$1" >/dev/null
 }
 
 container_running() {
@@ -195,7 +201,10 @@ ensure_prerequisites() {
 }
 
 capture_stable_image() {
-  container_exists "${CONTAINER_NAME}" || return 0
+  local exists_result=0
+  container_exists "${CONTAINER_NAME}" || exists_result=$?
+  [ "${exists_result}" -ne 2 ] || fail "无法确认旧主是否存在，拒绝按首次安装替换。"
+  [ "${exists_result}" -eq 0 ] || return 0
   OLD_IMAGE_ID="$(inspect_field "${CONTAINER_NAME}" '{{.Image}}')"
   [ -n "${OLD_IMAGE_ID}" ] || fail "无法取得当前稳定镜像ID。"
   OLD_IMAGE_REFERENCE="$(inspect_field "${CONTAINER_NAME}" '{{.Config.Image}}')"
@@ -210,13 +219,24 @@ capture_stable_image() {
 }
 
 create_safety_rollback_tag() {
-  [ -n "${ROLLBACK_IMAGE}" ] && return 0
-  local safety_version
+  # 已记录的安全标签也可能被外部删除或改指，只有镜像ID仍匹配时才能复用。
+  if [ -n "${ROLLBACK_IMAGE}" ] \
+    && [ "$(docker image inspect "${ROLLBACK_IMAGE}" --format '{{.Id}}' 2>/dev/null || true)" = "${OLD_IMAGE_ID}" ]; then
+    return 0
+  fi
+  local safety_version safety_tag safety_image
   safety_version="${SOURCE_VERSION_TAG:-unknown}"
   safety_version="$(printf '%s' "${safety_version}" | sed 's/[^A-Za-z0-9_.-]/-/g')"
-  ROLLBACK_TAG="test-rollback-${safety_version:0:80}-$(date '+%Y%m%d%H%M%S')"
-  ROLLBACK_IMAGE="${IMAGE_NAME}:${ROLLBACK_TAG}"
-  docker image tag "${OLD_IMAGE_ID}" "${ROLLBACK_IMAGE}"
+  safety_tag="test-rollback-${safety_version:0:80}-$(date '+%Y%m%d%H%M%S')"
+  safety_image="${IMAGE_NAME}:${safety_tag}"
+  # 回滚在退出保护中执行，不能依赖set -e；创建和确认失败时必须显式阻止替换主容器。
+  if ! docker image tag "${OLD_IMAGE_ID}" "${safety_image}" \
+    || [ "$(docker image inspect "${safety_image}" --format '{{.Id}}' 2>/dev/null || true)" != "${OLD_IMAGE_ID}" ]; then
+    log "ERROR: 无法固定旧镜像，禁止继续回滚替换。image=${safety_image}, expectedId=${OLD_IMAGE_ID}"
+    return 1
+  fi
+  ROLLBACK_TAG="${safety_tag}"
+  ROLLBACK_IMAGE="${safety_image}"
 }
 
 prepare_rollback_image() {
@@ -314,7 +334,8 @@ start_query_handoff() {
   QUERY_ES_SERVER_IMAGE="${RESTORE_IMAGE}" compose_up_detached "${QUERY_CONTAINER_NAME}" \
     -f "${COMPOSE_FILE}" -p "${PROJECT_NAME}" --profile query-handoff \
     up -d --no-build --force-recreate "${QUERY_SERVICE_NAME}"
-  wait_until_ready "${QUERY_CONTAINER_NAME}" "${QUERY_BASE_URL}" "query"
+  wait_until_ready "${QUERY_CONTAINER_NAME}" "${QUERY_BASE_URL}" "query" \
+    || fail "临时query-only实例未就绪，停止本次升级，旧主保持运行。"
   run_nginx_handoff_commands
 }
 
@@ -334,43 +355,53 @@ run_nginx_smoke() {
   bash -c "${NGINX_SMOKE_COMMAND}" || fail "$1真实业务查询冒烟失败。"
 }
 
+# 统一等待主实例/QUERY就绪，只返回结果，不决定退出或回滚。
+# expected_mode为空仅用于legacy旧镜像回滚：旧版本可能没有/ready，此时检查/health。
 wait_until_ready() {
   local container_name="$1"
   local base_url="$2"
   local expected_mode="$3"
-  local start_ts now response mode
+  local start_ts now response mode ready before after
   start_ts="$(date +%s)"
 
-  log "等待${container_name}严格就绪，超时时间${START_TIMEOUT}s。"
+  log "等待${container_name}就绪，等待上限${START_TIMEOUT}s。"
   while true; do
-    if container_running "${container_name}" \
-      && curl -fsS --connect-timeout 3 --max-time 10 "${base_url}/health" >/dev/null 2>&1; then
+    if ! container_running "${container_name}"; then
+      log "ERROR: 容器${container_name}未运行或无法确认运行状态。"
+      return 1
+    fi
+    ready=0
+    mode=""
+    if [ -z "${expected_mode}" ]; then
+      curl -fsS --connect-timeout 5 --max-time 10 "${base_url}/health" >/dev/null 2>&1 && ready=1
+    else
       response="$(api_curl "${base_url}/ready" 2>/dev/null || true)"
-      if [ -n "${response}" ] && json_value "${response}" '.ready == true' >/dev/null 2>&1; then
-        mode="$(json_value "${response}" '.serviceMode' 2>/dev/null || true)"
-        if [ -z "${expected_mode}" ] || [ "${mode,,}" = "${expected_mode,,}" ]; then
-          ensure_stable_container "${container_name}"
-          log "容器严格就绪：${container_name}, serviceMode=${mode}"
-          return 0
-        fi
+      mode="$(json_value "${response}" '.serviceMode' 2>/dev/null || true)"
+      if json_value "${response}" '.ready == true' >/dev/null 2>&1 \
+        && [ "${mode,,}" = "${expected_mode,,}" ]; then
+        ready=1
       fi
     fi
-
-    if container_exists "${container_name}" && ! container_running "${container_name}"; then
-      fail "容器${container_name}已退出。"
+    if [ "${ready}" -eq 1 ]; then
+      # 就绪后保留原稳定观察，防止容器直接退出或重启却被当作启动成功。
+      before="$(inspect_field "${container_name}" '{{.RestartCount}}')"
+      sleep "${STABLE_SECONDS}"
+      after="$(inspect_field "${container_name}" '{{.RestartCount}}')"
+      if [ -z "${before}" ] || [ "${before}" != "${after}" ] || ! container_running "${container_name}"; then
+        log "ERROR: 容器${container_name}在稳定观察期内退出、无法检查或再次重启。"
+        return 1
+      fi
+      log "容器已就绪并通过稳定观察：${container_name}, serviceMode=${mode:-legacy-health}"
+      return 0
     fi
     now="$(date +%s)"
-    [ $((now - start_ts)) -le "${START_TIMEOUT}" ] || fail "等待${container_name}/ready超时。"
+    if [ $((now - start_ts)) -ge "${START_TIMEOUT}" ]; then
+      log "ERROR: 等待${container_name}就绪超过${START_TIMEOUT}s。"
+      return 1
+    fi
+    # 固定HTTP超时和轮询间隔；总等待允许多出最后一次请求及稳定观察的时间。
     sleep "${POLL_INTERVAL}"
   done
-}
-
-ensure_stable_container() {
-  local before after
-  before="$(inspect_field "$1" '{{.RestartCount}}')"
-  sleep "${STABLE_SECONDS}"
-  after="$(inspect_field "$1" '{{.RestartCount}}')"
-  [ "${before}" = "${after}" ] || fail "容器$1在稳定观察期内再次重启。"
 }
 
 request_drain() {
@@ -504,8 +535,10 @@ stop_query_handoff() {
   QUERY_ES_SERVER_IMAGE="${RESTORE_IMAGE}" compose_cmd \
     -f "${COMPOSE_FILE}" -p "${PROJECT_NAME}" --profile query-handoff \
     rm -f "${QUERY_SERVICE_NAME}"
-  ! container_exists "${QUERY_CONTAINER_NAME}" \
-    || fail "临时query-only容器仍然存在，部署不能标记成功。"
+  local exists_result=0
+  container_exists "${QUERY_CONTAINER_NAME}" || exists_result=$?
+  [ "${exists_result}" -eq 1 ] \
+    || fail "临时query-only容器仍存在或无法确认已删除，部署不能标记成功。"
   QUERY_STARTED=0
 }
 
@@ -521,12 +554,73 @@ stop_query_handoff_best_effort() {
 }
 
 ensure_query_handoff_running_best_effort() {
-  [ "${QUERY_STARTED}" -eq 1 ] || return 0
-  container_running "${QUERY_CONTAINER_NAME}" && return 0
-  log "回滚前恢复临时query-only容器。"
-  QUERY_ES_SERVER_IMAGE="${RESTORE_IMAGE}" compose_up_detached "${QUERY_CONTAINER_NAME}" \
-    -f "${COMPOSE_FILE}" -p "${PROJECT_NAME}" --profile query-handoff \
-    up -d --no-build --force-recreate "${QUERY_SERVICE_NAME}" >/dev/null 2>&1 || true
+  [ "${DEPLOY_MODE}" = "safe" ] || return 0
+  QUERY_STARTED=1
+  if ! container_running "${QUERY_CONTAINER_NAME}"; then
+    log "回滚前恢复临时query-only容器。"
+    QUERY_ES_SERVER_IMAGE="${RESTORE_IMAGE}" compose_up_detached "${QUERY_CONTAINER_NAME}" \
+      -f "${COMPOSE_FILE}" -p "${PROJECT_NAME}" --profile query-handoff \
+      up -d --no-build --force-recreate "${QUERY_SERVICE_NAME}" || return 1
+  fi
+  wait_until_ready "${QUERY_CONTAINER_NAME}" "${QUERY_BASE_URL}" "query"
+}
+
+# 回滚排空与正常升级分开处理：失败只返回原因，不cancel、不exit，由回滚分支告警后强制停止。
+# operationId仅使用当前新主返回值，不能沿用已停止旧主的drain操作ID。
+drain_main_before_rollback() {
+  local response operation_id current_id code mode state result error
+  local start_ts now
+  start_ts="$(date +%s)"
+  log "回滚前请求新主优雅排空，等待上限${DRAIN_TIMEOUT}s，允许最后一次请求或轮询略超出。"
+  response="$(api_curl -X POST "${MAIN_BASE_URL}/internal/sync/drain")" || {
+    log "WARN: 回滚前新主drain请求失败或响应不确定，无法确认安全排空。"
+    return 1
+  }
+  operation_id="$(json_value "${response}" '.data.operationId' 2>/dev/null || true)"
+  if [ -z "${operation_id}" ]; then
+    log "WARN: 回滚前新主drain响应缺少operationId，无法确认安全排空。"
+    return 1
+  fi
+
+  while true; do
+    code="$(json_value "${response}" '.code' 2>/dev/null || true)"
+    mode="$(json_value "${response}" '.data.serviceMode' 2>/dev/null || true)"
+    state="$(json_value "${response}" '.data.coordinatorState' 2>/dev/null || true)"
+    current_id="$(json_value "${response}" '.data.operationId' 2>/dev/null || true)"
+    result="$(json_value "${response}" '.data.drainResult' 2>/dev/null || true)"
+    if [ "${code}" != "200" ] || [ "${mode,,}" != "all" ] \
+      || [ "${state}" != "DRAINING" ] || [ "${current_id}" != "${operation_id}" ]; then
+      log "WARN: 回滚前新主drain状态无法确认。code=${code}, mode=${mode}, state=${state}, expectedOperationId=${operation_id}, actualOperationId=${current_id}"
+      return 1
+    fi
+    case "${result}" in
+      DRAINED|DRAINED_WITH_ERRORS)
+        log "回滚前新主已安全排空。operationId=${operation_id}, result=${result}"
+        [ "${result}" != "DRAINED_WITH_ERRORS" ] \
+          || log "WARN: 新主虽已安全排空，但存在业务失败任务，回滚后需复核并按需补数。"
+        return 0
+        ;;
+      IN_PROGRESS)
+        ;;
+      *)
+        error="$(json_value "${response}" '.data.error // empty' 2>/dev/null || true)"
+        log "WARN: 回滚前新主未安全排空。operationId=${operation_id}, result=${result:-unknown}, error=${error:-未提供}"
+        return 1
+        ;;
+    esac
+
+    now="$(date +%s)"
+    if [ $((now - start_ts)) -ge "${DRAIN_TIMEOUT}" ]; then
+      log "WARN: 回滚前等待新主排空超过${DRAIN_TIMEOUT}s。operationId=${operation_id}"
+      return 1
+    fi
+    # 复用固定HTTP超时和轮询间隔；失败交给调用方明确告警后执行强制回滚。
+    sleep "${POLL_INTERVAL}"
+    response="$(api_curl "${MAIN_BASE_URL}/internal/sync/drain/status")" || {
+      log "WARN: 回滚前查询新主drain状态失败，无法确认安全排空。operationId=${operation_id}"
+      return 1
+    }
+  done
 }
 
 rollback_main_best_effort() {
@@ -541,23 +635,64 @@ rollback_main_best_effort() {
     RESTORE_TAG="${ROLLBACK_TAG}"
     RESTORE_IMAGE="${ROLLBACK_IMAGE}"
   fi
-  ensure_query_handoff_running_best_effort
+  ensure_query_handoff_running_best_effort \
+    || log "ERROR: 回滚查询接管未确认成功，请关注业务查询可用性；继续恢复旧主。"
   log "开始回滚主实例：${RESTORE_IMAGE}"
-  container_exists "${CONTAINER_NAME}" && docker rm -f "${CONTAINER_NAME}" >/dev/null 2>&1 || true
+  local force_rollback=0 exists_result=0
+  container_exists "${CONTAINER_NAME}" || exists_result=$?
+  [ "${exists_result}" -ne 2 ] || {
+    log "ERROR: 无法确认新主是否存在，禁止启动旧主，请人工检查Docker状态。"
+    return 1
+  }
+  if [ "${exists_result}" -eq 0 ]; then
+    if container_running "${CONTAINER_NAME}"; then
+      if drain_main_before_rollback; then
+        docker stop --time 30 "${CONTAINER_NAME}" >/dev/null 2>&1 || force_rollback=1
+      else
+        force_rollback=1
+      fi
+    elif [ "$(inspect_field "${CONTAINER_NAME}" '{{.State.Restarting}}')" = "true" ]; then
+      # 自动重启中的容器不能当成已稳定停止，否则可能在删除前再次启动。
+      log "WARN: 回滚前新主处于自动重启状态，无法完成排空，将按强制回滚处理。"
+      force_rollback=1
+    else
+      log "WARN: 回滚前新主已停止，不能补做安全排空；恢复旧版本后需复核中断任务。"
+    fi
+    if [ "${force_rollback}" -eq 1 ]; then
+      log "ERROR: 强制回滚：新主未确认安全排空或正常停止失败，即将强制删除${CONTAINER_NAME}并恢复${RESTORE_IMAGE}。本次不是安全排空成功。"
+      log "WARN: 强制回滚可能留下RUNNING任务或未保存的内存进度；后续从持久断点恢复时可能重放。请复核任务状态、索引设置及数据完整性，必要时人工补数；恢复不保证在容器启动后立即执行。"
+      print_diagnostics
+      docker rm -f "${CONTAINER_NAME}" >/dev/null 2>&1 || {
+        log "ERROR: 强制删除新主失败，禁止启动旧主，请人工检查容器和Docker状态。"
+        return 1
+      }
+    else
+      # 安全排空后只删除已停止容器；若它意外仍在运行，不能静默升级为强杀。
+      docker rm "${CONTAINER_NAME}" >/dev/null 2>&1 || {
+        log "ERROR: 删除已停止的新主失败，禁止启动旧主，请人工检查。"
+        return 1
+      }
+    fi
+    exists_result=0
+    container_exists "${CONTAINER_NAME}" || exists_result=$?
+    if [ "${exists_result}" -ne 1 ]; then
+      log "ERROR: 新主容器仍存在或无法确认已删除，禁止启动旧主，请人工检查。"
+      return 1
+    fi
+  fi
   start_main_with_tag "${RESTORE_TAG}" || return 1
 
-  local start_ts now
-  start_ts="$(date +%s)"
-  while true; do
-    if container_running "${CONTAINER_NAME}" \
-      && curl -fsS "${MAIN_BASE_URL}/health" >/dev/null 2>&1; then
-      log "旧镜像主实例已恢复；临时query-only容器继续保留，待人工确认后停止。"
-      return 0
-    fi
-    now="$(date +%s)"
-    [ $((now - start_ts)) -le "${START_TIMEOUT}" ] || return 1
-    sleep "${POLL_INTERVAL}"
-  done
+  local expected_mode="all"
+  if [ "${DEPLOY_MODE}" = "legacy" ]; then
+    expected_mode=""
+    log "WARN: legacy回滚仅验证旧版本/health，查询及同步恢复情况需要人工复核。"
+  fi
+  wait_until_ready "${CONTAINER_NAME}" "${MAIN_BASE_URL}" "${expected_mode}" || return 1
+  if [ "${force_rollback}" -eq 1 ]; then
+    log "WARN: 强制回滚已完成，旧镜像主实例已恢复：${RESTORE_IMAGE}。新主未确认安全停止，请复核中断任务和数据；如有临时query-only容器，确认后再停止。"
+  else
+    log "旧镜像主实例已恢复；请复核查询和任务恢复情况，如有临时query-only容器，确认后再停止。"
+  fi
 }
 
 print_main_status() {
@@ -619,7 +754,8 @@ main() {
   fi
 
   start_main_with_tag "${IMAGE_TAG}"
-  wait_until_ready "${CONTAINER_NAME}" "${MAIN_BASE_URL}" "all"
+  wait_until_ready "${CONTAINER_NAME}" "${MAIN_BASE_URL}" "all" \
+    || fail "新版主实例未就绪，进入退出保护。"
   verify_new_sync_runtime
   if [ -n "${OLD_IMAGE_ID}" ] && [ "${DEPLOY_MODE}" = "safe" ]; then
     run_nginx_smoke "新主实例恢复后"
