@@ -1,0 +1,54 @@
+{
+  "settings": {
+    "index": {
+      "number_of_shards": "1",
+      "number_of_replicas": "0",
+      "max_result_window": 20000
+    }
+  },
+  "mappings": {
+    "dynamic": "strict",
+    "properties": {
+      "live_day": {
+        "type": "integer"
+      },
+      "user_id": {
+        "type": "integer"
+      },
+      "type": {
+        "type": "integer"
+      },
+      "prop_id": {
+        "type": "integer"
+      },
+      "times": {
+        "type": "long"
+      },
+      "amount": {
+        "type": "long"
+      },
+      "coin": {
+        "type": "long"
+      },
+      "win_coin": {
+        "type": "long"
+      },
+      "sex": {
+        "type": "integer"
+      },
+      "country_code": {
+        "type": "keyword"
+      },
+      "anchor": {
+        "type": "integer"
+      },
+      "language_code": {
+        "type": "keyword"
+      },
+      "create_time": {
+        "type": "date",
+        "format": "yyyy-MM-dd'T'HH:mm:ss || yyyy-MM-dd HH:mm:ss || yyyy-MM-dd || yyyy-MM || yyyy || epoch_millis"
+      }
+    }
+  }
+}

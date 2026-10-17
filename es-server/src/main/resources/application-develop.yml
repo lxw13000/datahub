@@ -256,3 +256,49 @@ sano:
         dt-column: live_day
         # yyyyMMdd整数日期，例如20261015。
         dt-column-type: INTEGER_DATE
+      - enabled: false
+        # 用户日消费数据每天读取昨日，写入所属月索引；创建时即绑定Alias。
+        index-mode: MONTH
+        index-alias: sano_user_data
+        table-name: sano_user_data
+        mapping-file: sano_user_data.json
+        # ES文档ID按顺序以“_”拼接，区分同一用户同一天的消费类型和道具。
+        document-id-columns:
+          - user_id
+          - live_day
+          - type
+          - prop_id
+        # 按live_day对账当日数量及最小/最大user_id。
+        reconcile: true
+        # 月索引永久保存，不自动删除。
+        delete-history-index: false
+        # 整日一次读取，ES仍按Bulk配置分批写入；未完成时重放全天。
+        read-mode: FULL_DAY
+        # user_id在单日内可能重复，本表不按其分页，仅用于对账。
+        id-column: user_id
+        dt-column: live_day
+        # yyyyMMdd整数日期，直接使用等值条件，不对MySQL字段使用函数。
+        dt-column-type: INTEGER_DATE
+      - enabled: false
+        # 活跃用户日数据每天读取昨日，写入所属月索引；创建时即绑定Alias。
+        index-mode: MONTH
+        index-alias: sano_user_active
+        table-name: sano_user_active
+        mapping-file: sano_user_active.json
+        # 三个DECIMAL充值字段沿用scaled_float/100；金额按两位小数缩放，不改变源单位。
+        # 该映射不覆盖DECIMAL(20,2)全部极值；单值乘100须处于有符号long范围内。
+        # ES文档ID按顺序以“_”拼接，同一用户不同日期互不覆盖。
+        document-id-columns:
+          - user_id
+          - day_int
+        # 按day_int对账当日数量及最小/最大user_id。
+        reconcile: true
+        # 月索引永久保存，不自动删除。
+        delete-history-index: false
+        # 整日一次读取，ES仍按Bulk配置分批写入；未完成时重放全天。
+        read-mode: FULL_DAY
+        # 整日模式不按该字段分页，user_id用于对账统计。
+        id-column: user_id
+        dt-column: day_int
+        # yyyyMMdd整数日期，例如20261015。
+        dt-column-type: INTEGER_DATE

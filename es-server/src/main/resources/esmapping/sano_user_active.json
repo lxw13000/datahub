@@ -1,0 +1,134 @@
+{
+  "settings": {
+    "index": {
+      "number_of_shards": "1",
+      "number_of_replicas": "0",
+      "max_result_window": 20000
+    }
+  },
+  "mappings": {
+    "dynamic": "strict",
+    "properties": {
+      "user_id": {
+        "type": "integer"
+      },
+      "day_int": {
+        "type": "integer"
+      },
+      "sex": {
+        "type": "integer"
+      },
+      "country_code": {
+        "type": "keyword"
+      },
+      "language_code": {
+        "type": "keyword"
+      },
+      "proxy_id": {
+        "type": "integer"
+      },
+      "anchor": {
+        "type": "integer"
+      },
+      "real_status": {
+        "type": "integer"
+      },
+      "second_online": {
+        "type": "long"
+      },
+      "second_sign_live": {
+        "type": "long"
+      },
+      "second_sign_link": {
+        "type": "long"
+      },
+      "second_many_live": {
+        "type": "long"
+      },
+      "second_many_link": {
+        "type": "long"
+      },
+      "second_voice_link": {
+        "type": "long"
+      },
+      "recharge_pay_coin": {
+        "type": "long"
+      },
+      "recharge_apple_coin": {
+        "type": "scaled_float",
+        "scaling_factor": 100
+      },
+      "recharge_google_coin": {
+        "type": "scaled_float",
+        "scaling_factor": 100
+      },
+      "recharge_third_coin": {
+        "type": "scaled_float",
+        "scaling_factor": 100
+      },
+      "recharge_seller_coin": {
+        "type": "long"
+      },
+      "consume_luxurious": {
+        "type": "long"
+      },
+      "consume_lucky": {
+        "type": "long"
+      },
+      "consume_lucky_return": {
+        "type": "long"
+      },
+      "jackpot_lucky_send": {
+        "type": "long"
+      },
+      "jackpot_game_send": {
+        "type": "long"
+      },
+      "consume_game": {
+        "type": "long"
+      },
+      "consume_game_return": {
+        "type": "long"
+      },
+      "consume_shop": {
+        "type": "long"
+      },
+      "diamond_convert_coin_deduct": {
+        "type": "long"
+      },
+      "diamond_convert_coin_add": {
+        "type": "long"
+      },
+      "diamond_convert_pay_coin_deduct": {
+        "type": "long"
+      },
+      "diamond_convert_pay_coin_add": {
+        "type": "long"
+      },
+      "income_consume_luxurious": {
+        "type": "long"
+      },
+      "income_consume_lucky": {
+        "type": "long"
+      },
+      "income_game": {
+        "type": "long"
+      },
+      "withdrawal_third_amount": {
+        "type": "long"
+      },
+      "withdrawal_payroll_amount": {
+        "type": "long"
+      },
+      "proxy_anchor_income": {
+        "type": "long"
+      },
+      "proxy_son_income": {
+        "type": "long"
+      },
+      "is_pay_day": {
+        "type": "integer"
+      }
+    }
+  }
+}

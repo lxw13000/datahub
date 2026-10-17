@@ -52,4 +52,14 @@ public interface EsIndexAlias {
      */
     String SANO_PROXY_ANCHOR_DATA = "sano_proxy_anchor_data";
 
+    /**
+     * 用户日消费数据，聚合MONTH月物理索引。
+     */
+    String SANO_USER_DATA = "sano_user_data";
+
+    /**
+     * 活跃用户日数据，聚合MONTH月物理索引。
+     */
+    String SANO_USER_ACTIVE = "sano_user_active";
+
 }
