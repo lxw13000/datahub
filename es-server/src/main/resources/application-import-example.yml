@@ -153,9 +153,9 @@ sano:
         mapping-file: sano_proxy_anchor_data.json
         # ES文档ID按配置顺序以“_”拼接，整日重放时覆盖同一业务记录。
         document-id-columns:
+          - live_day
           - proxy_id
           - anchor_user_id
-          - live_day
         # 按live_day对账当日数量及最小/最大anchor_user_id。
         reconcile: true
         # 月索引永久保存，不自动清理。
@@ -176,8 +176,8 @@ sano:
         mapping-file: sano_user_data.json
         # ES文档ID按顺序以“_”拼接，区分同一用户同一天的消费类型和道具。
         document-id-columns:
-          - user_id
           - live_day
+          - user_id
           - type
           - prop_id
         # 按live_day对账当日数量及最小/最大user_id。
@@ -201,8 +201,8 @@ sano:
         # 该映射不覆盖DECIMAL(20,2)全部极值；单值乘100须处于有符号long范围内。
         # ES文档ID按顺序以“_”拼接，同一用户不同日期互不覆盖。
         document-id-columns:
-          - user_id
           - day_int
+          - user_id
         # 按day_int对账当日数量及最小/最大user_id。
         reconcile: true
         # 月索引永久保存，不自动删除。
