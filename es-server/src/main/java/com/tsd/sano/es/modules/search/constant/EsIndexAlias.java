@@ -25,6 +25,11 @@ public interface EsIndexAlias {
      */
     String SANO_WALLET_DIAMOND_FREEZE_RECORD = "sano_wallet_diamond_freeze_record";
 
+    /**
+     * 冻结收益日汇总，聚合MONTH月物理索引。
+     */
+    String SANO_WALLET_DIAMOND_FREEZE = "sano_wallet_diamond_freeze";
+
 
     /**
      * 钻石记录10分钟记录明细

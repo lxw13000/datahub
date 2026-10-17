@@ -1,0 +1,45 @@
+{
+  "settings": {
+    "index": {
+      "number_of_shards": "1",
+      "number_of_replicas": "0",
+      "max_result_window": 20000
+    }
+  },
+  "mappings": {
+    "dynamic": "strict",
+    "properties": {
+      "id": {
+        "type": "long"
+      },
+      "user_id": {
+        "type": "integer"
+      },
+      "receive_user_id": {
+        "type": "integer"
+      },
+      "day_int": {
+        "type": "integer"
+      },
+      "anchor_id": {
+        "type": "integer"
+      },
+      "type": {
+        "type": "integer"
+      },
+      "diamond": {
+        "type": "long"
+      },
+      "refund": {
+        "type": "integer"
+      },
+      "refund_user": {
+        "type": "keyword"
+      },
+      "refund_time": {
+        "type": "date",
+        "format": "yyyy-MM-dd'T'HH:mm:ss || yyyy-MM-dd HH:mm:ss || yyyy-MM-dd || yyyy-MM || yyyy || epoch_millis"
+      }
+    }
+  }
+}

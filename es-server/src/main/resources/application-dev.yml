@@ -218,6 +218,22 @@ sano:
         dt-column: create_time
         dt-column-type: DATETIME
       - enabled: true
+        # 冻结收益日汇总按月保存，创建索引时即绑定Alias。
+        index-mode: MONTH
+        index-alias: sano_wallet_diamond_freeze
+        table-name: sano_wallet_diamond_freeze
+        mapping-file: sano_wallet_diamond_freeze.json
+        # 按day_int对账当日数量及最小/最大id，不统计整个月。
+        reconcile: true
+        # 月索引永久保留，不自动删除。
+        delete-history-index: false
+        # 唯一自增主键用于分页及ES文档ID，无需配置document-id-columns。
+        read-mode: CURSOR
+        id-column: id
+        # yyyyMMdd整数日期；历史解除冻结或数量变化由其他写入方式更新。
+        dt-column: day_int
+        dt-column-type: INTEGER_DATE
+      - enabled: true
         # 主播日数据每天读取昨日，写入所属月索引；创建时即绑定Alias。
         index-mode: MONTH
         index-alias: sano_anchor_data
