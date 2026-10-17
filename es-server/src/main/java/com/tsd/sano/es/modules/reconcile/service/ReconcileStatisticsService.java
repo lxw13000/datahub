@@ -4,6 +4,7 @@ import co.elastic.clients.elasticsearch.ElasticsearchClient;
 import co.elastic.clients.elasticsearch._types.FieldValue;
 import co.elastic.clients.elasticsearch._types.SortOrder;
 import co.elastic.clients.elasticsearch._types.query_dsl.Query;
+import co.elastic.clients.elasticsearch.core.CountRequest;
 import co.elastic.clients.elasticsearch.core.SearchRequest;
 import co.elastic.clients.elasticsearch.core.SearchResponse;
 import co.elastic.clients.elasticsearch.core.search.Hit;
@@ -15,6 +16,7 @@ import com.tsd.sano.es.modules.index.EsIndexNameResolver;
 import com.tsd.sano.es.modules.notify.model.NotifyMessage;
 import com.tsd.sano.es.modules.notify.service.NotifyService;
 import com.tsd.sano.es.modules.reconcile.model.ReconcileResult;
+import com.tsd.sano.es.modules.reconcile.model.HistoryReconcileResult;
 import org.apache.commons.lang3.StringUtils;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -30,9 +32,9 @@ import java.util.ArrayList;
 import java.util.List;
 
 /**
- * 独立统计对账服务：日期分桶按业务日期对账，SINGLE按全表现状对账。
+ * 独立统计对账服务：日常任务按日或SINGLE全表现状对账，人工历史按整个请求日期范围对账。
  *
- * <p>通过独立Spring执行器异步读取MySQL和ES的总量、最小ID及最大ID并比较；
+ * <p>通过独立Spring执行器异步对账：日常比较总量、最小ID及最大ID，历史范围只比较总量；
  * MySQL非空时先主动刷新目标物理索引，避免尚未刷新文档造成假差异。
  * 该服务不维护导入任务状态，也不执行重试。</p>
  */
@@ -224,6 +226,146 @@ public class ReconcileStatisticsService {
             log.error("===> ES-Reconcile execution failed. table={}, index={}, date={}, error={}",
                     tableName, indexName, statisticsDate, message, error);
             notifyResult(result);
+        }
+    }
+
+    /**
+     * 人工历史范围全部导入成功后，独立异步执行一次日期范围总量对账。
+     *
+     * <p>仅用于MONTH/YEAR；不是循环调用每日对账。MySQL和所有目标物理索引使用相同
+     * 左闭右开的日期条件，防止首尾月/年中范围外数据参与统计。只发送一份历史对账通知，
+     * 不依赖单列或复合文档ID，不创建持久对账任务，失败也不修改已经完成的历史导入结果。</p>
+     *
+     * @param tableConfig 目标表配置，reconcile=false时直接跳过
+     * @param startDate 开始业务日期，包含
+     * @param endDate 结束业务日期，包含
+     * @param operationId 对应人工历史导入操作ID
+     */
+    @Async("esReconcileExecutor")
+    public void reconcileHistory(SyncTableConfig tableConfig, LocalDate startDate, LocalDate endDate,
+                                 String operationId) {
+        if (!tableConfig.isReconcile()) {
+            log.info("===> ES-Reconcile history skipped by table config. operationId={}, table={}, startDate={}, endDate={}",
+                    operationId, tableConfig.getTableName(), startDate, endDate);
+            return;
+        }
+        String tableName = tableConfig.getTableName();
+        List<String> indexNames = new ArrayList<>();
+        Long mysqlCount = null;
+        Long esCount = null;
+        ReconcileResult.Status status = ReconcileResult.Status.FAILED;
+        String errorMessage = null;
+        long startedAt = System.currentTimeMillis();
+        try {
+            IndexMode mode = tableConfig.getIndexMode();
+            if (mode != IndexMode.MONTH && mode != IndexMode.YEAR) {
+                throw new ServiceException("Historical reconciliation only supports MONTH/YEAR, table=" + tableName);
+            }
+            // 直接按物理周期列举索引，不按天提交查询，不依赖可能包含范围外索引的业务Alias。
+            LocalDate period = mode == IndexMode.MONTH ? startDate.withDayOfMonth(1) : startDate.withDayOfYear(1);
+            while (!period.isAfter(endDate)) {
+                indexNames.add(EsIndexNameResolver.resolve(mode, tableConfig.getIndexAlias(), null, period));
+                period = mode == IndexMode.MONTH ? period.plusMonths(1) : period.plusYears(1);
+            }
+            LocalDate endExclusive = endDate.plusDays(1);
+            List<Object> parameters = new ArrayList<>();
+            Query esCondition = switch (tableConfig.getDtColumnType()) {
+                case INTEGER_DATE -> {
+                    int firstDay = Integer.parseInt(DateTimeFormatter.BASIC_ISO_DATE.format(startDate));
+                    int lastDayExclusive = Integer.parseInt(DateTimeFormatter.BASIC_ISO_DATE.format(endExclusive));
+                    parameters.add(firstDay);
+                    parameters.add(lastDayExclusive);
+                    // yyyyMMdd整数在double中可精确表示；该条件仅用于限定统计日期范围。
+                    yield Query.of(query -> query.range(range -> range.number(number -> number
+                            .field(tableConfig.getDtColumn()).gte((double) firstDay).lt((double) lastDayExclusive))));
+                }
+                case DATE -> {
+                    parameters.add(java.sql.Date.valueOf(startDate));
+                    parameters.add(java.sql.Date.valueOf(endExclusive));
+                    yield Query.of(query -> query.range(range -> range.date(date -> date
+                            .field(tableConfig.getDtColumn()).gte(startDate.toString()).lt(endExclusive.toString())
+                            .format("strict_date_optional_time"))));
+                }
+                case DATETIME -> {
+                    parameters.add(Timestamp.valueOf(startDate.atStartOfDay()));
+                    parameters.add(Timestamp.valueOf(endExclusive.atStartOfDay()));
+                    yield Query.of(query -> query.range(range -> range.date(date -> date
+                            .field(tableConfig.getDtColumn()).gte(startDate.atStartOfDay().toString())
+                            .lt(endExclusive.atStartOfDay().toString()).format("strict_date_optional_time"))));
+                }
+            };
+            String mysqlSql = "SELECT COUNT(1) FROM " + tableName
+                    + " WHERE " + tableConfig.getDtColumn() + " >= ? AND " + tableConfig.getDtColumn() + " < ?";
+            mysqlCount = jdbcTemplate.queryForObject(mysqlSql, Long.class, parameters.toArray());
+            if (mysqlCount == 0L) {
+                // 沿用既有空源语义：通知MySQL无数据，不查询ES，也不宣称已匹配。
+                status = ReconcileResult.Status.MYSQL_EMPTY;
+                return;
+            }
+
+            // 空数据月份可能从未创建索引，允许缺失；其源端若确有数据，最终总数会反映差异。
+            // 一次刷新全部范围索引；刷新分片失败不能继续宣称统计已经可见。
+            var refresh = client.indices().refresh(request -> request.index(indexNames)
+                    .ignoreUnavailable(true).allowNoIndices(true));
+            if (refresh.shards() != null && refresh.shards().failed().longValue() > 0L) {
+                throw new ServiceException("ES history reconcile refresh has failed shards, table=" + tableName);
+            }
+            // 历史只核对总数，无需按ID排序或读取文档，兼容复合文档ID及FULL_DAY读取表。
+            CountRequest countRequest = new CountRequest.Builder().index(indexNames)
+                    .ignoreUnavailable(true).allowNoIndices(true).query(esCondition)
+                    .build();
+            var countResponse = client.count(countRequest);
+            // Count可能返回部分分片的计数；分片失败时不能将不完整总数视为对账结果。
+            if (countResponse.shards().failed().longValue() > 0L) {
+                throw new ServiceException("ES history reconcile count has failed shards, table=" + tableName);
+            }
+            esCount = countResponse.count();
+            status = mysqlCount.equals(esCount)
+                    ? ReconcileResult.Status.MATCHED : ReconcileResult.Status.MIS_MATCHED;
+        } catch (RuntimeException | IOException error) {
+            errorMessage = StringUtils.defaultIfBlank(error.getMessage(), error.getClass().getSimpleName());
+            log.error("===> ES-Reconcile history failed. operationId={}, table={}, startDate={}, endDate={}, error={}",
+                    operationId, tableName, startDate, endDate, errorMessage, error);
+        } finally {
+            log.info("===> ES-Reconcile history completed. operationId={}, table={}, startDate={}, endDate={}, "
+                            + "result={}, mysqlCount={}, elasticsearchCount={}, costMs={}",
+                    operationId, tableName, startDate, endDate, status, mysqlCount, esCount,
+                    System.currentTimeMillis() - startedAt);
+            notifyHistoryResult(new HistoryReconcileResult(operationId, tableName, startDate, endDate,
+                    indexNames, status, mysqlCount, esCount, errorMessage));
+        }
+    }
+
+    /**
+     * 历史范围使用独立中文通知及事件标识，不与单日或SINGLE对账通知混用。
+     */
+    private void notifyHistoryResult(HistoryReconcileResult result) {
+        try {
+            String statusText = switch (result.status()) {
+                case MATCHED -> "匹配成功";
+                case MIS_MATCHED -> "数据不一致";
+                case MYSQL_EMPTY -> "MySQL无数据，未对账";
+                case FAILED -> "对账执行失败";
+            };
+            String title = SUBJECT_PREFIX + " ES历史数据对账 " + statusText + " " + result.tableName();
+            StringBuilder content = new StringBuilder(640).append(title).append('\n')
+                    .append("操作ID：").append(result.operationId()).append('\n')
+                    .append("表名：").append(result.tableName()).append('\n')
+                    .append("统计范围：").append(result.startDate()).append(" ~ ").append(result.endDate())
+                    .append("（含起止日期）").append('\n')
+                    .append("范围索引：").append(String.join(", ", result.indexNames())).append('\n')
+                    .append("结果：").append(statusText).append('\n')
+                    .append("MySQL总数：").append(result.mysqlCount() == null ? "未获取" : result.mysqlCount()).append('\n')
+                    .append("Elasticsearch总数：").append(result.elasticsearchCount() == null
+                            ? "未获取" : result.elasticsearchCount());
+            if (StringUtils.isNotBlank(result.error())) {
+                content.append('\n').append("错误：").append(StringUtils.left(result.error(), 800));
+            }
+            notifyService.send(new NotifyMessage("HISTORY_RECONCILE_" + result.status().name(),
+                    result.operationId(), title, content.toString()));
+        } catch (Exception error) {
+            log.error("===> ES-Reconcile history notify failed. operationId={}, error={}",
+                    result.operationId(), error.getMessage(), error);
         }
     }
 

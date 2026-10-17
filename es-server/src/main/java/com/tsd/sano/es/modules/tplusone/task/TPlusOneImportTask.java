@@ -282,13 +282,6 @@ public class TPlusOneImportTask {
                             result.setCompletedDays(result.getCompletedDays() + 1L);
                             log.info("===> ES-TPlusOne history date completed. operationId={}, table={}, date={}, index={}, completedDays={}",
                                     operationId, tableName, date, config.getIndexName(), result.getCompletedDays());
-                            try {
-                                // 对账保持独立异步及单表开关，提交失败不改变已完成日期，不触发任务通知。
-                                reconcileStatisticsService.reconcile(table, date);
-                            } catch (RuntimeException reconcileError) {
-                                log.warn("===> ES-TPlusOne history reconcile submit failed. operationId={}, table={}, date={}, error={}",
-                                        operationId, tableName, date, reconcileError.getMessage());
-                            }
                         } finally {
                             // importData退出时Reader/Bulk及内存已清理，才允许释放单日运行态。
                             drainCoordinator.finishManualHistoryTask(runtimeTask.getTaskId(), failed);
@@ -310,6 +303,17 @@ public class TPlusOneImportTask {
                     // 不调用持久任务恢复入口，人工历史路径本身不扫描或重投任何任务文档。
                     drainCoordinator.onTPlusOneDispatcherStopped();
                     notifyService.notifyHistoryResult(result);
+                    if (result.getStatus() == HistoryImportResult.Status.SUCCESS) {
+                        try {
+                            // 全范围完成后只提交一次独立历史对账；停止或失败不对未完成范围对账。
+                            reconcileStatisticsService.reconcileHistory(table, startDate, endDate, operationId);
+                        } catch (RuntimeException reconcileError) {
+                            // 对账提交失败不修改导入成功结果，也不能重新占用已经释放的同步令牌。
+                            log.warn("===> ES-TPlusOne history reconcile submit failed. operationId={}, table={}, "
+                                            + "startDate={}, endDate={}, error={}",
+                                    operationId, tableName, startDate, endDate, reconcileError.getMessage());
+                        }
+                    }
                 }
             });
             return "人工历史导入已提交，不写任务文档；operationId=" + operationId;
