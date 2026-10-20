@@ -2,6 +2,8 @@ package com.tsd.sano.es.controller.coin.dto;
 
 import lombok.Data;
 
+import java.util.List;
+
 /**
  * app个人中心金币记录查询参数
  */
@@ -17,6 +19,11 @@ public class AppCoinRecordDTO {
      * 业务类型
      */
     private Long businessType;
+
+    /**
+     * 业务类型
+     */
+    private List<Long> businessCodes;
 
     /**
      * 开始时间，格式：yyyy-MM-dd HH:mm:ss。

@@ -2,6 +2,9 @@ package com.tsd.sano.es.controller.coin.dto;
 
 import lombok.Data;
 
+import java.util.ArrayList;
+import java.util.List;
+
 /**
  * 金币记录查询参数
  */
@@ -31,7 +34,10 @@ public class SearchCoinRecordDTO {
      * 业务类型
      */
     private Long businessType;
-
+    /**
+     * 业务类型集合
+     */
+    private List<Long> businessCodes;
     /**
      * 开始时间，格式：yyyy-MM-dd HH:mm:ss。
      */
@@ -65,4 +71,17 @@ public class SearchCoinRecordDTO {
      * 上次查询的最后一条记录id
      */
     private Long lastId;
+
+    /**
+     * 合并业务类型集合与单值参数，不修改原始入参。
+     */
+    public List<Long> realBusinessCodes() {
+        List<Long> codes = businessCodes == null
+                ? new ArrayList<>()
+                : new ArrayList<>(businessCodes);
+        if (businessType != null && !codes.contains(businessType)) {
+            codes.add(businessType);
+        }
+        return codes;
+    }
 }

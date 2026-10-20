@@ -101,6 +101,7 @@ public class WalletCoinController {
         SearchCoinRecordDTO dto = new SearchCoinRecordDTO();
         dto.setSearchType(0);
         dto.setUserId(recordDTO.getUserId());
+        dto.setBusinessCodes(recordDTO.getBusinessCodes());
         dto.setBusinessType(recordDTO.getBusinessType());
         dto.setStartTime(recordDTO.getStartTime());
         dto.setEndTime(recordDTO.getEndTime());

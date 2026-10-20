@@ -451,8 +451,8 @@ public class WalletCoinRecordSearch {
             boolBuilder.must(EsSearchUtil.getTerm("room_id", dto.getRoomId()));
         }
         // 可选查询业务类型，ES字段使用下划线命名。
-        if (dto.getBusinessType() != null) {
-            boolBuilder.must(EsSearchUtil.getTerm("business_type", dto.getBusinessType()));
+        if (!dto.realBusinessCodes().isEmpty()) {
+            boolBuilder.must(EsSearchUtil.getTermsOr("business_type", dto.realBusinessCodes()));
         }
         // 时间段
         EsSearchUtil.setDateEQ(boolBuilder, "create_time", TimeUtils.BASIC, dto.getStartTime(), dto.getEndTime());
