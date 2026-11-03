@@ -320,5 +320,5 @@ sano:
         # 整日模式不按该字段分页，user_id用于对账统计。
         id-column: user_id
         dt-column: day_int
-        # yyyyMMdd整数日期，例如20261015。
+        # yyyyMMdd整数日期，例如20261015
         dt-column-type: INTEGER_DATE
