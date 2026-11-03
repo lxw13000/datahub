@@ -1,0 +1,9 @@
+{
+  "host": "your-mysql-host",
+  "port": 3306,
+  "database": "sano",
+  "username": "readonly_user",
+  "password": "your_password",
+  "connect_timeout_seconds": 15,
+  "read_timeout_seconds": 300
+}

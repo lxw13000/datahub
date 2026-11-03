@@ -1,0 +1,12 @@
+{
+  "start": "2026-09-01 00:00:00",
+  "end": "2026-10-01 00:00:00",
+  "es_time_zone": "+08:00",
+  "coin_tokens_per_usd": "10000",
+  "game_margin_rate": "0.04",
+  "anchor_rate": "0.005",
+  "jackpot_pool_rate": "0.005",
+  "service_fee_share": "0.15",
+  "es_page_size": 1000,
+  "mysql_batch_size": 500
+}
